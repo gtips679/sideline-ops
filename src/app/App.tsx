@@ -23,12 +23,26 @@ const personaUserIds: Record<PersonaKey, string> = {
 
 export function App() {
   const [data, setData] = useState<BootstrapData | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [persona, setPersona] = useState<PersonaKey>("admin");
   const [route, setRoute] = useState<AppRoute>("dashboard");
 
   useEffect(() => {
-    getBootstrap().then(setData);
+    refreshData();
   }, []);
+
+  async function refreshData() {
+    setRefreshing(true);
+    setLoadError(null);
+    try {
+      setData(await getBootstrap());
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Could not load app data.");
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   const currentUser = useMemo(() => {
     if (!data) return null;
@@ -72,7 +86,7 @@ export function App() {
       <div className="workspace">
         <header className="topbar">
           <div>
-            <span className="eyebrow">Phase 0 shell</span>
+            <span className="eyebrow">Milestone 0.2</span>
             <strong>{currentUser ? `${currentUser.display_name} / ${currentUser.role}` : "Loading"}</strong>
           </div>
           <label className="persona-switcher">
@@ -84,7 +98,11 @@ export function App() {
             </select>
           </label>
         </header>
-        <main className="content">{data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest) : <LoadingState />}</main>
+        <main className="content">
+          {loadError ? <div className="notice error">{loadError}</div> : null}
+          {refreshing && data ? <div className="notice info">Refreshing data...</div> : null}
+          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData) : <LoadingState />}
+        </main>
         <nav className="mobile-nav" aria-label="Mobile primary">
           {nav.slice(0, 5).map((item) => {
             const Icon = item.icon;
@@ -105,19 +123,20 @@ function renderRoute(
   route: AppRoute,
   data: BootstrapData,
   currentUser: User,
-  updateAvailabilityRequest: (request: AvailabilityRequest) => void
+  updateAvailabilityRequest: (request: AvailabilityRequest) => void,
+  refreshData: () => Promise<void>
 ) {
   switch (route) {
     case "dashboard":
       return <AdminDashboardScreen events={data.events} requests={data.availabilityRequests} users={data.users} activity={data.activity} />;
     case "staff":
-      return <StaffListScreen users={data.users} />;
+      return <StaffListScreen users={data.users} currentUser={currentUser} onRefresh={refreshData} />;
     case "locations":
-      return <LocationsScreen locations={data.locations} />;
+      return <LocationsScreen locations={data.locations} currentUser={currentUser} onRefresh={refreshData} />;
     case "events":
-      return <EventsScreen events={data.events} />;
+      return <EventsScreen events={data.events} locations={data.locations} currentUser={currentUser} onRefresh={refreshData} />;
     case "availability":
-      return <AvailabilityScreen requests={data.availabilityRequests} users={data.users} />;
+      return <AvailabilityScreen requests={data.availabilityRequests} users={data.users} events={data.events} currentUser={currentUser} onRefresh={refreshData} />;
     case "messages":
       return <MessagesPlaceholder />;
     case "inventory":

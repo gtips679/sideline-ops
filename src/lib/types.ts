@@ -51,6 +51,17 @@ export type AvailabilityResponse = {
   updated_at: string;
 };
 
+export type AvailabilityRecipient = {
+  id: string;
+  request_id: string;
+  user_id: string;
+  display_name?: string;
+  role?: UserRole;
+  delivery_status: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AvailabilityRequest = {
   id: string;
   event_id: string | null;
@@ -65,6 +76,7 @@ export type AvailabilityRequest = {
   created_at: string;
   updated_at: string;
   responses: AvailabilityResponse[];
+  recipients: AvailabilityRecipient[];
 };
 
 export type ActivityItem = {
@@ -85,4 +97,8 @@ export type BootstrapData = {
   events: Event[];
   availabilityRequests: AvailabilityRequest[];
   activity: ActivityItem[];
+};
+
+export type ApiError = {
+  error: string;
 };

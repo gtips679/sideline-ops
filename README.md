@@ -1,6 +1,6 @@
 # Sideline Ops
 
-Phase 0 architecture shell for Sideline Supplies, a PWA-style concessions and staffing operations app.
+Milestone 0.2 foundation for Sideline Supplies, a PWA-style concessions and staffing operations app.
 
 This project includes:
 
@@ -9,6 +9,8 @@ This project includes:
 - Cloudflare D1 schema and demo seed data under `migrations`
 - Temporary persona switcher for Glenn/Admin, Manager, and Staff
 - Responsive admin and staff app shell
+- Admin create forms for staff, locations, events, and availability requests
+- Targeted availability requests with recipient-aware response counts
 
 ## Project Structure
 
@@ -54,6 +56,12 @@ Apply the migration locally:
 npm run db:migrate:local
 ```
 
+Run the Vite frontend with demo fallback data:
+
+```bash
+npm run dev
+```
+
 Build and run the Pages/Functions/D1 stack locally:
 
 ```bash
@@ -84,6 +92,16 @@ npm run db:migrate:remote
 
 ## Notes
 
-Authentication is intentionally not implemented in Phase 0. The persona switcher is temporary scaffolding for UI and workflow testing.
+Authentication is intentionally not implemented yet. The persona switcher is temporary scaffolding for UI and workflow testing.
+
+Availability requests are targeted through `availability_request_recipients`. Admin response counts and staff request visibility use that table, so "No response" only includes users who were actually targeted.
 
 The app is structured for later additions: web push notifications, inventory photo uploads, checklists, scheduling, Zettle integration, Google Calendar import, SMS fallback, and AI summaries.
+
+## Local Reset / Reseed
+
+There is no reset script yet. For local development, delete `.wrangler/state` only when you intentionally want to remove the local D1 data, then rerun:
+
+```bash
+npm run db:migrate:local
+```

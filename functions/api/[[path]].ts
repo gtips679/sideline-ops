@@ -166,6 +166,11 @@ async function createAvailabilityRequest(context: ApiContext): Promise<Response>
   const id = stringValue(body.id) || crypto.randomUUID();
   const title = requireString(body.title, "title");
   const actorId = requireString(body.created_by_user_id, "created_by_user_id");
+  const recipientUserIds = await resolveRecipientUserIds(context.env.SIDELINE_DB, body);
+
+  if (recipientUserIds.length === 0) {
+    throw new Error("Missing recipient_user_ids");
+  }
 
   await context.env.SIDELINE_DB.prepare(
     `INSERT INTO availability_requests (id, event_id, title, message, response_deadline, status, created_by_user_id, created_at, updated_at)
@@ -182,7 +187,23 @@ async function createAvailabilityRequest(context: ApiContext): Promise<Response>
     )
     .run();
 
-  await logActivity(context.env.SIDELINE_DB, actorId, "availability_request", id, "created", `${title} was created.`);
+  await context.env.SIDELINE_DB.batch(
+    recipientUserIds.map((userId) =>
+      context.env.SIDELINE_DB.prepare(
+        `INSERT OR IGNORE INTO availability_request_recipients (id, request_id, user_id, delivery_status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      ).bind(crypto.randomUUID(), id, userId, "pending")
+    )
+  );
+
+  await logActivity(
+    context.env.SIDELINE_DB,
+    actorId,
+    "availability_request",
+    id,
+    "created",
+    `${title} was created for ${recipientUserIds.length} staff member${recipientUserIds.length === 1 ? "" : "s"}.`
+  );
   return json({ availabilityRequest: await getAvailabilityRequestById(context.env.SIDELINE_DB, id) }, 201);
 }
 
@@ -195,6 +216,22 @@ async function upsertAvailabilityResponse(context: ApiContext): Promise<Response
   if (!["yes", "no", "maybe"].includes(response)) {
     throw new Error("Invalid response");
   }
+
+  const recipient = await context.env.SIDELINE_DB.prepare(
+    "SELECT id FROM availability_request_recipients WHERE request_id = ? AND user_id = ?"
+  )
+    .bind(requestId, userId)
+    .first();
+
+  if (!recipient) {
+    throw new Error("Invalid response target");
+  }
+
+  const existing = await context.env.SIDELINE_DB.prepare(
+    "SELECT response FROM availability_responses WHERE request_id = ? AND user_id = ?"
+  )
+    .bind(requestId, userId)
+    .first<{ response: string }>();
 
   const id = stringValue(body.id) || `avail_resp_${requestId}_${userId}`;
   await context.env.SIDELINE_DB.prepare(
@@ -209,7 +246,11 @@ async function upsertAvailabilityResponse(context: ApiContext): Promise<Response
     .bind(id, requestId, userId, response, stringValue(body.note))
     .run();
 
-  await logActivity(context.env.SIDELINE_DB, userId, "availability_response", requestId, `responded_${response}`, `Availability response changed to ${response}.`);
+  const action = existing ? "changed_response" : "responded";
+  const summary = existing
+    ? `Availability response changed from ${existing.response} to ${response}.`
+    : `Availability response recorded as ${response}.`;
+  await logActivity(context.env.SIDELINE_DB, userId, "availability_response", requestId, action, summary);
   return json({ availabilityRequest: await getAvailabilityRequestById(context.env.SIDELINE_DB, requestId) }, 201);
 }
 
@@ -259,12 +300,23 @@ async function getAvailabilityRequests(db: D1Database) {
     )
     .all();
 
+  const recipients = await db
+    .prepare(
+      `SELECT availability_request_recipients.*, users.display_name, users.role
+       FROM availability_request_recipients
+       JOIN users ON users.id = availability_request_recipients.user_id
+       ORDER BY users.display_name`
+    )
+    .all();
+
   const requestRows = requests.results as Array<Record<string, unknown> & { id: string }>;
   const responseRows = responses.results as Array<Record<string, unknown> & { request_id: string }>;
+  const recipientRows = recipients.results as Array<Record<string, unknown> & { request_id: string }>;
 
   return requestRows.map((request) => ({
     ...request,
     responses: responseRows.filter((response) => response.request_id === request.id),
+    recipients: recipientRows.filter((recipient) => recipient.request_id === request.id),
   }));
 }
 
@@ -334,6 +386,28 @@ function numberValue(value: JsonValue | undefined): number | null {
 function boolToInt(value: JsonValue | undefined, defaultValue: boolean): number {
   if (typeof value === "boolean") return value ? 1 : 0;
   return defaultValue ? 1 : 0;
+}
+
+async function resolveRecipientUserIds(db: D1Database, body: Record<string, JsonValue | undefined>): Promise<string[]> {
+  if (stringValue(body.recipient_mode) === "all_active_staff") {
+    const result = await db.prepare("SELECT id FROM users WHERE role = 'staff' AND is_active = 1 ORDER BY display_name").all<{ id: string }>();
+    return result.results.map((user) => user.id);
+  }
+
+  if (!Array.isArray(body.recipient_user_ids)) {
+    return [];
+  }
+
+  const ids = body.recipient_user_ids
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+
+  const selectedIds = Array.from(new Set(ids));
+  if (selectedIds.length === 0) return [];
+
+  const activeStaff = await db.prepare("SELECT id FROM users WHERE role = 'staff' AND is_active = 1").all<{ id: string }>();
+  const activeStaffIds = new Set(activeStaff.results.map((user) => user.id));
+  return selectedIds.filter((id) => activeStaffIds.has(id));
 }
 
 function json(payload: unknown, status = 200): Response {

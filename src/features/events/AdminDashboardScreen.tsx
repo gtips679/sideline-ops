@@ -16,8 +16,8 @@ export function AdminDashboardScreen({ events, requests, users, activity }: Admi
   const todayKey = new Date().toISOString().slice(0, 10);
   const todaysEvents = events.filter((event) => event.starts_at.slice(0, 10) === todayKey);
   const activeRequest = requests[0];
-  const counts = activeRequest ? getResponseCounts(activeRequest, users) : { yes: 0, no: 0, maybe: 0, noResponse: 0 };
-  const noResponseStaff = activeRequest ? getNoResponseStaff(activeRequest, users) : [];
+  const counts = activeRequest ? getResponseCounts(activeRequest) : { yes: 0, no: 0, maybe: 0, noResponse: 0 };
+  const noResponseStaff = activeRequest ? getNoResponseStaff(activeRequest) : [];
 
   return (
     <>

@@ -20,7 +20,9 @@ body {
 }
 
 button,
-select {
+select,
+input,
+textarea {
   font: inherit;
 }
 
@@ -383,6 +385,145 @@ th {
   max-width: 760px;
 }
 
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.form-grid label,
+.fieldset {
+  display: grid;
+  gap: 7px;
+}
+
+.form-grid label > span,
+.fieldset legend {
+  color: #5a655f;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.form-grid input,
+.form-grid select,
+.form-grid textarea {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #ccd5cc;
+  border-radius: 7px;
+  padding: 9px 10px;
+  color: #1f2723;
+  background: #ffffff;
+}
+
+.form-grid textarea {
+  min-height: 86px;
+  resize: vertical;
+}
+
+.wide-field,
+.fieldset,
+.form-actions {
+  grid-column: 1 / -1;
+}
+
+.fieldset {
+  margin: 0;
+  border: 1px solid #dfe5dd;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.checkbox-field,
+.radio-field {
+  display: flex !important;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 8px !important;
+}
+
+.checkbox-field input,
+.radio-field input {
+  width: 16px;
+  min-height: 16px;
+}
+
+.recipient-picker {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin-top: 8px;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.primary-button {
+  min-height: 40px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 16px;
+  color: #ffffff;
+  background: #1f6f5b;
+  font-weight: 800;
+}
+
+.primary-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.notice {
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-weight: 700;
+}
+
+.notice.success {
+  color: #18543c;
+  background: #dceee4;
+}
+
+.notice.error {
+  color: #87392f;
+  background: #f3dfdc;
+}
+
+.notice.info {
+  color: #1f5878;
+  background: #dbe9f3;
+}
+
+.empty-state {
+  color: #647069;
+}
+
+.response-group-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.response-group {
+  border: 1px solid #e2e7df;
+  border-radius: 7px;
+  padding: 12px;
+  background: #fbfcf9;
+}
+
+.response-group h3 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+
+.response-group ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #3f4a44;
+}
+
 .mobile-nav {
   display: none;
 }
@@ -406,6 +547,11 @@ th {
 
   .metric-grid,
   .dashboard-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .recipient-picker,
+  .response-group-grid {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -466,7 +612,10 @@ th {
 
   .metric-grid,
   .metric-grid.four,
-  .dashboard-grid {
+  .dashboard-grid,
+  .form-grid,
+  .recipient-picker,
+  .response-group-grid {
     grid-template-columns: 1fr;
   }
 

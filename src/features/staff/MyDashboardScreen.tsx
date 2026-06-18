@@ -2,6 +2,7 @@ import { MetricCard } from "../../components/MetricCard";
 import { SectionHeader } from "../../components/SectionHeader";
 import { formatDateTime } from "../../lib/format";
 import type { AvailabilityRequest, Event, User } from "../../lib/types";
+import { getRequestsForUser } from "../availability/availabilityUtils";
 
 type MyDashboardScreenProps = {
   currentUser: User;
@@ -10,7 +11,8 @@ type MyDashboardScreenProps = {
 };
 
 export function MyDashboardScreen({ currentUser, events, requests }: MyDashboardScreenProps) {
-  const pendingRequests = requests.filter((request) => !request.responses.some((response) => response.user_id === currentUser.id));
+  const targetedRequests = getRequestsForUser(requests, currentUser);
+  const pendingRequests = targetedRequests.filter((request) => !request.responses.some((response) => response.user_id === currentUser.id));
   const nextEvent = events[0];
 
   return (

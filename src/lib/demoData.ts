@@ -41,6 +41,14 @@ export const demoData: BootstrapData = {
       created_by_user_id: "user_glenn",
       created_at: now,
       updated_at: now,
+      recipients: [
+        { id: "avail_recipient_dchs_user_ava", request_id: "avail_req_dchs_sat", user_id: "user_ava", display_name: "Ava Johnson", role: "staff", delivery_status: "pending", created_at: now, updated_at: now },
+        { id: "avail_recipient_dchs_user_ben", request_id: "avail_req_dchs_sat", user_id: "user_ben", display_name: "Ben Carter", role: "staff", delivery_status: "pending", created_at: now, updated_at: now },
+        { id: "avail_recipient_dchs_user_carmen", request_id: "avail_req_dchs_sat", user_id: "user_carmen", display_name: "Carmen Diaz", role: "staff", delivery_status: "pending", created_at: now, updated_at: now },
+        { id: "avail_recipient_dchs_user_devin", request_id: "avail_req_dchs_sat", user_id: "user_devin", display_name: "Devin Lee", role: "staff", delivery_status: "pending", created_at: now, updated_at: now },
+        { id: "avail_recipient_dchs_user_ella", request_id: "avail_req_dchs_sat", user_id: "user_ella", display_name: "Ella Brooks", role: "staff", delivery_status: "pending", created_at: now, updated_at: now },
+        { id: "avail_recipient_dchs_user_finn", request_id: "avail_req_dchs_sat", user_id: "user_finn", display_name: "Finn Walker", role: "staff", delivery_status: "pending", created_at: now, updated_at: now },
+      ],
       responses: [
         { id: "avail_resp_ava", request_id: "avail_req_dchs_sat", user_id: "user_ava", display_name: "Ava Johnson", role: "staff", response: "yes", note: "Can work the morning and lunch rush.", responded_at: now, created_at: now, updated_at: now },
         { id: "avail_resp_ben", request_id: "avail_req_dchs_sat", user_id: "user_ben", display_name: "Ben Carter", role: "staff", response: "maybe", note: "Need to confirm family plans.", responded_at: now, created_at: now, updated_at: now },

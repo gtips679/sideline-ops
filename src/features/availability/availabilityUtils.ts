@@ -1,7 +1,8 @@
-import type { AvailabilityRequest, AvailabilityResponseValue, User } from "../../lib/types";
+import type { AvailabilityRecipient, AvailabilityRequest, AvailabilityResponseValue, User } from "../../lib/types";
 
-export function getResponseCounts(request: AvailabilityRequest, users: User[]) {
-  const staff = users.filter((user) => user.role === "staff" && user.is_active);
+type ResponseGroupKey = AvailabilityResponseValue | "noResponse";
+
+export function getResponseCounts(request: AvailabilityRequest) {
   const counts: Record<AvailabilityResponseValue | "noResponse", number> = {
     yes: 0,
     no: 0,
@@ -9,8 +10,8 @@ export function getResponseCounts(request: AvailabilityRequest, users: User[]) {
     noResponse: 0,
   };
 
-  staff.forEach((user) => {
-    const response = request.responses.find((item) => item.user_id === user.id);
+  request.recipients.forEach((recipient) => {
+    const response = request.responses.find((item) => item.user_id === recipient.user_id);
     if (!response) counts.noResponse += 1;
     else counts[response.response] += 1;
   });
@@ -18,8 +19,26 @@ export function getResponseCounts(request: AvailabilityRequest, users: User[]) {
   return counts;
 }
 
-export function getNoResponseStaff(request: AvailabilityRequest, users: User[]) {
-  return users.filter(
-    (user) => user.role === "staff" && user.is_active && !request.responses.some((response) => response.user_id === user.id)
-  );
+export function getResponseGroups(request: AvailabilityRequest) {
+  const groups: Record<ResponseGroupKey, AvailabilityRecipient[]> = {
+    yes: [],
+    no: [],
+    maybe: [],
+    noResponse: [],
+  };
+
+  request.recipients.forEach((recipient) => {
+    const response = request.responses.find((item) => item.user_id === recipient.user_id);
+    groups[response?.response ?? "noResponse"].push(recipient);
+  });
+
+  return groups;
+}
+
+export function getNoResponseStaff(request: AvailabilityRequest) {
+  return getResponseGroups(request).noResponse;
+}
+
+export function getRequestsForUser(requests: AvailabilityRequest[], user: User) {
+  return requests.filter((request) => request.recipients.some((recipient) => recipient.user_id === user.id));
 }
