@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Sideline Ops maskable icon">
+  <rect width="512" height="512" fill="#1f6f5b"/>
+  <circle cx="256" cy="256" r="176" fill="#f7f8f5"/>
+  <path d="M174 196h164v42H174zM174 256h164v42H174zM174 316h106v42H174z" fill="#1f6f5b"/>
+  <path d="M318 322l20 20 42-52" fill="none" stroke="#d49b2a" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

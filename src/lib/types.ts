@@ -99,6 +99,12 @@ export type BootstrapData = {
   activity: ActivityItem[];
 };
 
+export type ApiHealth = {
+  ok: boolean;
+  service: string;
+  checked_at: string;
+};
+
 export type ApiError = {
   error: string;
 };

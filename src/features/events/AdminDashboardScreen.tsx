@@ -1,4 +1,5 @@
 import { MetricCard } from "../../components/MetricCard";
+import { EmptyState } from "../../components/EmptyState";
 import { SectionHeader } from "../../components/SectionHeader";
 import { formatDateTime } from "../../lib/format";
 import type { ActivityItem, AvailabilityRequest, Event, User } from "../../lib/types";
@@ -32,15 +33,19 @@ export function AdminDashboardScreen({ events, requests, users, activity }: Admi
         <section className="panel">
           <h2>Upcoming events</h2>
           <div className="event-list">
-            {events.slice(0, 4).map((event) => (
-              <article className="event-row" key={event.id}>
-                <div>
-                  <strong>{event.title}</strong>
-                  <span>{event.location_name}</span>
-                </div>
-                <small>{formatDateTime(event.starts_at)}</small>
-              </article>
-            ))}
+            {events.length === 0 ? (
+              <EmptyState title="No events scheduled" message="Create an event from the Events screen to populate the dashboard." />
+            ) : (
+              events.slice(0, 4).map((event) => (
+                <article className="event-row" key={event.id}>
+                  <div>
+                    <strong>{event.title}</strong>
+                    <span>{event.location_name}</span>
+                  </div>
+                  <small>{formatDateTime(event.starts_at)}</small>
+                </article>
+              ))
+            )}
           </div>
         </section>
         <section className="panel">

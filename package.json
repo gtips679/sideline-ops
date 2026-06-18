@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "pages:dev": "wrangler pages dev dist --local --persist-to .wrangler/state",
+    "db:reset:local": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"if (Test-Path -LiteralPath .wrangler) { Remove-Item -LiteralPath .wrangler -Recurse -Force }; npm run db:migrate:local\"",
     "db:migrate:local": "wrangler d1 migrations apply sideline-ops --local",
     "db:migrate:remote": "wrangler d1 migrations apply sideline-ops --remote",
     "typecheck": "tsc -b"

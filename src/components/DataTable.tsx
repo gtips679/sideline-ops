@@ -26,7 +26,7 @@ export function DataTable<T>({ columns, rows, getRowKey }: DataTableProps<T>) {
           {rows.map((row) => (
             <tr key={getRowKey(row)}>
               {columns.map((column) => (
-                <td key={column.header}>{column.render(row)}</td>
+                <td data-label={column.header} key={column.header}>{column.render(row)}</td>
               ))}
             </tr>
           ))}

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
+import { EmptyState } from "../../components/EmptyState";
 import { MetricCard } from "../../components/MetricCard";
 import { SectionHeader } from "../../components/SectionHeader";
 import { StatusPill } from "../../components/StatusPill";
@@ -102,12 +103,16 @@ export function AvailabilityScreen({ requests, users, events, currentUser, onRef
             </label>
             {recipientMode === "selected" ? (
               <div className="recipient-picker">
-                {staff.map((user) => (
-                  <label className="checkbox-field" key={user.id}>
-                    <input type="checkbox" checked={selectedUserIds.includes(user.id)} onChange={() => toggleUser(user.id)} />
-                    <span>{user.display_name}</span>
-                  </label>
-                ))}
+                {staff.length === 0 ? (
+                  <EmptyState title="No active staff" message="Add active staff before creating selected-recipient requests." />
+                ) : (
+                  staff.map((user) => (
+                    <label className="checkbox-field" key={user.id}>
+                      <input type="checkbox" checked={selectedUserIds.includes(user.id)} onChange={() => toggleUser(user.id)} />
+                      <span>{user.display_name}</span>
+                    </label>
+                  ))
+                )}
               </div>
             ) : null}
           </fieldset>
@@ -119,7 +124,11 @@ export function AvailabilityScreen({ requests, users, events, currentUser, onRef
         {error ? <div className="notice error">{error}</div> : null}
       </section>
       <div className="stack">
-        {requests.length === 0 ? <section className="panel empty-state">No availability requests yet.</section> : null}
+        {requests.length === 0 ? (
+          <section className="panel">
+            <EmptyState title="No availability requests yet" message="Create a request above to ask targeted staff who can work." />
+          </section>
+        ) : null}
         {requests.map((request) => {
           const counts = getResponseCounts(request);
           const groups = getResponseGroups(request);

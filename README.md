@@ -1,6 +1,6 @@
 # Sideline Ops
 
-Milestone 0.2 foundation for Sideline Supplies, a PWA-style concessions and staffing operations app.
+Milestone 0.3 foundation for Sideline Supplies, a PWA-style concessions and staffing operations app.
 
 This project includes:
 
@@ -11,6 +11,8 @@ This project includes:
 - Responsive admin and staff app shell
 - Admin create forms for staff, locations, events, and availability requests
 - Targeted availability requests with recipient-aware response counts
+- Basic PWA manifest/icons
+- Settings/status screen for API, bootstrap, persona, and build info
 
 ## Project Structure
 
@@ -30,7 +32,7 @@ functions/api               Cloudflare Pages Functions API routes
 migrations                  D1 schema and seed data
 ```
 
-## Setup
+## Local Setup
 
 Install dependencies:
 
@@ -38,7 +40,7 @@ Install dependencies:
 npm install
 ```
 
-Run the frontend with demo fallback data:
+Run the frontend-only Vite app. This mode is useful for UI work and falls back to local demo data if the API is not running:
 
 ```bash
 npm run dev
@@ -50,19 +52,19 @@ Create the D1 database in Cloudflare, then replace the placeholder `database_id`
 npx wrangler d1 create sideline-ops
 ```
 
-Apply the migration locally:
+Apply migrations locally:
 
 ```bash
 npm run db:migrate:local
 ```
 
-Run the Vite frontend with demo fallback data:
+Build the frontend:
 
 ```bash
-npm run dev
+npm run build
 ```
 
-Build and run the Pages/Functions/D1 stack locally:
+Run the Cloudflare Pages/Functions/D1 stack locally:
 
 ```bash
 npm run build
@@ -74,6 +76,24 @@ Apply the migration to the remote D1 database when ready:
 ```bash
 npm run db:migrate:remote
 ```
+
+## Local Reset / Reseed
+
+To wipe local persisted Wrangler/D1 state and rerun migrations on Windows:
+
+```bash
+npm run db:reset:local
+```
+
+Manual PowerShell equivalent:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8788 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+Remove-Item -LiteralPath .wrangler -Recurse -Force
+npm run db:migrate:local
+```
+
+This only affects local `.wrangler` state. It does not touch the remote D1 database.
 
 ## API Routes
 
@@ -90,6 +110,44 @@ npm run db:migrate:remote
 - `POST /api/availability-responses`
 - `GET /api/activity`
 
+Smoke-test local Pages/API mode:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8788/api/health
+Invoke-RestMethod http://127.0.0.1:8788/api/bootstrap
+```
+
+## Cloudflare Deployment Notes
+
+Cloudflare Pages should build the Vite app and serve the Functions API from `functions/api`.
+
+Recommended build settings:
+
+- Build command: `npm run build`
+- Build output directory: `dist`
+- Functions directory: `functions`
+
+Required binding:
+
+- D1 binding name: `SIDELINE_DB`
+- Database name: `sideline-ops`
+
+Before deploying against a real Cloudflare account:
+
+```bash
+npx wrangler d1 create sideline-ops
+```
+
+Copy the returned database id into `wrangler.jsonc`, replacing `replace-with-cloudflare-d1-database-id`.
+
+Apply remote migrations:
+
+```bash
+npm run db:migrate:remote
+```
+
+No secrets are required for Milestone 0.3. Future milestones may add secrets or bindings for auth, push notifications, SMS, uploads, and integrations.
+
 ## Notes
 
 Authentication is intentionally not implemented yet. The persona switcher is temporary scaffolding for UI and workflow testing.
@@ -98,10 +156,6 @@ Availability requests are targeted through `availability_request_recipients`. Ad
 
 The app is structured for later additions: web push notifications, inventory photo uploads, checklists, scheduling, Zettle integration, Google Calendar import, SMS fallback, and AI summaries.
 
-## Local Reset / Reseed
+## PWA Notes
 
-There is no reset script yet. For local development, delete `.wrangler/state` only when you intentionally want to remove the local D1 data, then rerun:
-
-```bash
-npm run db:migrate:local
-```
+The app includes a basic installable manifest with SVG placeholder icons. Production app-store-quality PNG icons are still a design TODO.

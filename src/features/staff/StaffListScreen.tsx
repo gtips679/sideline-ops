@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { DataTable } from "../../components/DataTable";
+import { EmptyState } from "../../components/EmptyState";
 import { SectionHeader } from "../../components/SectionHeader";
 import { StatusPill } from "../../components/StatusPill";
 import { createUser } from "../../lib/api";
@@ -77,17 +78,21 @@ export function StaffListScreen({ users, currentUser, onRefresh }: StaffListScre
         {error ? <div className="notice error">{error}</div> : null}
       </section>
       <section className="panel">
-        <DataTable
-          rows={users}
-          getRowKey={(user) => user.id}
-          columns={[
-            { header: "Name", render: (user) => <strong>{user.display_name}</strong> },
-            { header: "Role", render: (user) => <StatusPill status={user.role} /> },
-            { header: "Phone", render: (user) => user.phone ?? "Not set" },
-            { header: "Email", render: (user) => user.email ?? "Not set" },
-            { header: "Status", render: (user) => (user.is_active ? "Active" : "Inactive") },
-          ]}
-        />
+        {users.length === 0 ? (
+          <EmptyState title="No staff yet" message="Add the first staff member above to start building the team list." />
+        ) : (
+          <DataTable
+            rows={users}
+            getRowKey={(user) => user.id}
+            columns={[
+              { header: "Name", render: (user) => <strong>{user.display_name}</strong> },
+              { header: "Role", render: (user) => <StatusPill status={user.role} /> },
+              { header: "Phone", render: (user) => user.phone ?? "Not set" },
+              { header: "Email", render: (user) => user.email ?? "Not set" },
+              { header: "Status", render: (user) => (user.is_active ? "Active" : "Inactive") },
+            ]}
+          />
+        )}
       </section>
     </>
   );

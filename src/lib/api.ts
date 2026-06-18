@@ -1,5 +1,11 @@
 import { demoData } from "./demoData";
-import type { AvailabilityRequest, AvailabilityResponseValue, BootstrapData, Event, Location, User } from "./types";
+import type { ApiHealth, AvailabilityRequest, AvailabilityResponseValue, BootstrapData, Event, Location, User } from "./types";
+
+export async function getApiHealth(): Promise<ApiHealth> {
+  const response = await fetch("/api/health");
+  if (!response.ok) throw new Error("API health check failed");
+  return (await response.json()) as ApiHealth;
+}
 
 export async function getBootstrap(): Promise<BootstrapData> {
   try {

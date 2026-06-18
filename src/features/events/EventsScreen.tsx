@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { DataTable } from "../../components/DataTable";
+import { EmptyState } from "../../components/EmptyState";
 import { SectionHeader } from "../../components/SectionHeader";
 import { StatusPill } from "../../components/StatusPill";
 import { createEvent } from "../../lib/api";
@@ -113,18 +114,22 @@ export function EventsScreen({ events, locations, currentUser, onRefresh }: Even
         {error ? <div className="notice error">{error}</div> : null}
       </section>
       <section className="panel">
-        <DataTable
-          rows={events}
-          getRowKey={(event) => event.id}
-          columns={[
-            { header: "Event", render: (event) => <strong>{event.title}</strong> },
-            { header: "Location", render: (event) => event.location_name ?? event.location_id },
-            { header: "Type", render: (event) => titleCase(event.event_type) },
-            { header: "Starts", render: (event) => formatDateTime(event.starts_at) },
-            { header: "Crowd", render: (event) => event.expected_crowd ?? "Not set" },
-            { header: "Status", render: (event) => <StatusPill status={event.status} /> },
-          ]}
-        />
+        {events.length === 0 ? (
+          <EmptyState title="No events yet" message="Create the first event above once locations are in place." />
+        ) : (
+          <DataTable
+            rows={events}
+            getRowKey={(event) => event.id}
+            columns={[
+              { header: "Event", render: (event) => <strong>{event.title}</strong> },
+              { header: "Location", render: (event) => event.location_name ?? event.location_id },
+              { header: "Type", render: (event) => titleCase(event.event_type) },
+              { header: "Starts", render: (event) => formatDateTime(event.starts_at) },
+              { header: "Crowd", render: (event) => event.expected_crowd ?? "Not set" },
+              { header: "Status", render: (event) => <StatusPill status={event.status} /> },
+            ]}
+          />
+        )}
       </section>
     </>
   );

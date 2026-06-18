@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { EmptyState } from "../../components/EmptyState";
 import { SectionHeader } from "../../components/SectionHeader";
 import { StatusPill } from "../../components/StatusPill";
 import { saveAvailabilityResponse } from "../../lib/api";
@@ -38,7 +39,11 @@ export function StaffRequestsScreen({ currentUser, requests, onRequestUpdated }:
       <SectionHeader title="Requests" eyebrow="Staff" />
       {error ? <div className="notice error">{error}</div> : null}
       <div className="stack">
-        {targetedRequests.length === 0 ? <section className="panel empty-state">No requests are assigned to you right now.</section> : null}
+        {targetedRequests.length === 0 ? (
+          <section className="panel">
+            <EmptyState title="No requests assigned" message="You do not have any targeted availability requests right now." />
+          </section>
+        ) : null}
         {targetedRequests.map((request) => {
           const currentResponse = request.responses.find((item) => item.user_id === currentUser.id);
           return (

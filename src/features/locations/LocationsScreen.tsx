@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { DataTable } from "../../components/DataTable";
+import { EmptyState } from "../../components/EmptyState";
 import { SectionHeader } from "../../components/SectionHeader";
 import { createLocation } from "../../lib/api";
 import { titleCase } from "../../lib/format";
@@ -69,16 +70,20 @@ export function LocationsScreen({ locations, currentUser, onRefresh }: Locations
         {error ? <div className="notice error">{error}</div> : null}
       </section>
       <section className="panel">
-        <DataTable
-          rows={locations}
-          getRowKey={(location) => location.id}
-          columns={[
-            { header: "Location", render: (location) => <strong>{location.name}</strong> },
-            { header: "Type", render: (location) => titleCase(location.location_type) },
-            { header: "Notes", render: (location) => location.notes ?? "None" },
-            { header: "Status", render: (location) => (location.is_active ? "Active" : "Inactive") },
-          ]}
-        />
+        {locations.length === 0 ? (
+          <EmptyState title="No locations yet" message="Add a concession stand, gym, or field location above." />
+        ) : (
+          <DataTable
+            rows={locations}
+            getRowKey={(location) => location.id}
+            columns={[
+              { header: "Location", render: (location) => <strong>{location.name}</strong> },
+              { header: "Type", render: (location) => titleCase(location.location_type) },
+              { header: "Notes", render: (location) => location.notes ?? "None" },
+              { header: "Status", render: (location) => (location.is_active ? "Active" : "Inactive") },
+            ]}
+          />
+        )}
       </section>
     </>
   );

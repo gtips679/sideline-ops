@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { PlaceholderPanel } from "../components/PlaceholderPanel";
 import { SectionHeader } from "../components/SectionHeader";
-import { getBootstrap } from "../lib/api";
-import type { AvailabilityRequest, BootstrapData, PersonaKey, User } from "../lib/types";
+import { getApiHealth, getBootstrap } from "../lib/api";
+import type { ApiHealth, AvailabilityRequest, BootstrapData, PersonaKey, User } from "../lib/types";
 import { AvailabilityScreen } from "../features/availability/AvailabilityScreen";
 import { StaffRequestsScreen } from "../features/availability/StaffRequestsScreen";
 import { ChecklistsPlaceholder } from "../features/checklists/ChecklistsPlaceholder";
@@ -11,6 +11,7 @@ import { EventsScreen } from "../features/events/EventsScreen";
 import { InventoryPlaceholder } from "../features/inventory/InventoryPlaceholder";
 import { LocationsScreen } from "../features/locations/LocationsScreen";
 import { MessagesPlaceholder } from "../features/messages/MessagesPlaceholder";
+import { SettingsScreen } from "../features/settings/SettingsScreen";
 import { MyDashboardScreen } from "../features/staff/MyDashboardScreen";
 import { StaffListScreen } from "../features/staff/StaffListScreen";
 import { adminNav, staffNav, type AppRoute } from "./navigation";
@@ -21,16 +22,31 @@ const personaUserIds: Record<PersonaKey, string> = {
   staff: "user_ava",
 };
 
+const appVersion = "Milestone 0.3";
+
 export function App() {
   const [data, setData] = useState<BootstrapData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [health, setHealth] = useState<ApiHealth | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [persona, setPersona] = useState<PersonaKey>("admin");
   const [route, setRoute] = useState<AppRoute>("dashboard");
 
   useEffect(() => {
     refreshData();
+    refreshHealth();
   }, []);
+
+  async function refreshHealth() {
+    setHealthError(null);
+    try {
+      setHealth(await getApiHealth());
+    } catch (err) {
+      setHealth(null);
+      setHealthError(err instanceof Error ? err.message : "Could not reach API health.");
+    }
+  }
 
   async function refreshData() {
     setRefreshing(true);
@@ -86,7 +102,7 @@ export function App() {
       <div className="workspace">
         <header className="topbar">
           <div>
-            <span className="eyebrow">Milestone 0.2</span>
+            <span className="eyebrow">{appVersion}</span>
             <strong>{currentUser ? `${currentUser.display_name} / ${currentUser.role}` : "Loading"}</strong>
           </div>
           <label className="persona-switcher">
@@ -101,10 +117,10 @@ export function App() {
         <main className="content">
           {loadError ? <div className="notice error">{loadError}</div> : null}
           {refreshing && data ? <div className="notice info">Refreshing data...</div> : null}
-          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData) : <LoadingState />}
+          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData, health, healthError) : <LoadingState />}
         </main>
         <nav className="mobile-nav" aria-label="Mobile primary">
-          {nav.slice(0, 5).map((item) => {
+          {nav.map((item) => {
             const Icon = item.icon;
             return (
               <button className={route === item.id ? "active" : ""} key={item.id} onClick={() => setRoute(item.id)} type="button">
@@ -124,7 +140,9 @@ function renderRoute(
   data: BootstrapData,
   currentUser: User,
   updateAvailabilityRequest: (request: AvailabilityRequest) => void,
-  refreshData: () => Promise<void>
+  refreshData: () => Promise<void>,
+  health: ApiHealth | null,
+  healthError: string | null
 ) {
   switch (route) {
     case "dashboard":
@@ -159,10 +177,15 @@ function renderRoute(
       );
     case "settings":
       return (
-        <>
-          <SectionHeader title="Settings" />
-          <PlaceholderPanel title="Settings placeholder" description="Business settings, notification preferences, and integrations will be configured here." />
-        </>
+        <SettingsScreen
+          appVersion={appVersion}
+          bootstrapLoaded={true}
+          currentUser={currentUser}
+          data={data}
+          health={health}
+          healthError={healthError}
+          isLocalLike={window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"}
+        />
       );
     case "my-dashboard":
       return <MyDashboardScreen currentUser={currentUser} events={data.events} requests={data.availabilityRequests} />;
