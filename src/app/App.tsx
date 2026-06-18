@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { PlaceholderPanel } from "../components/PlaceholderPanel";
 import { SectionHeader } from "../components/SectionHeader";
 import { getApiHealth, getBootstrap } from "../lib/api";
+import { disableCurrentPush, enablePushForUser, initialPushUiState, inspectPushState, type PushUiState } from "../lib/push";
 import type { ApiHealth, AvailabilityRequest, BootstrapData, PersonaKey, User } from "../lib/types";
 import { AvailabilityScreen } from "../features/availability/AvailabilityScreen";
 import { StaffRequestsScreen } from "../features/availability/StaffRequestsScreen";
@@ -24,13 +25,15 @@ const personaUserIds: Record<PersonaKey, string> = {
   staff: "user_ava",
 };
 
-const appVersion = "0.5.0-dev";
+const appVersion = "1.0.0-dev";
 
 export function App() {
   const [data, setData] = useState<BootstrapData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  const [pushState, setPushState] = useState<PushUiState>(initialPushUiState);
+  const [pushBusy, setPushBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [accessGranted, setAccessGranted] = useState(() => getStoredAccess().granted);
   const [accessGrantedAt, setAccessGrantedAt] = useState<string | null>(() => getStoredAccess().grantedAt);
@@ -41,6 +44,7 @@ export function App() {
     if (accessGranted) {
       refreshData();
       refreshHealth();
+      refreshPushState();
     }
   }, [accessGranted]);
 
@@ -83,6 +87,11 @@ export function App() {
     }
   }
 
+  async function refreshPushState() {
+    setPushState((current) => ({ ...current, serviceWorkerStatus: "checking", pushConfigStatus: "checking", subscriptionStatus: "checking", error: null }));
+    setPushState(await inspectPushState());
+  }
+
   const currentUser = useMemo(() => {
     if (!data) return null;
     return data.users.find((user) => user.id === personaUserIds[persona]) ?? data.users[0] ?? null;
@@ -101,6 +110,35 @@ export function App() {
       ...data,
       availabilityRequests: data.availabilityRequests.map((request) => (request.id === updated.id ? updated : request)),
     });
+  }
+
+  async function enableNotifications() {
+    if (!currentUser) return;
+    setPushBusy(true);
+    setPushState((current) => ({ ...current, message: null, error: null }));
+    try {
+      await enablePushForUser(currentUser.id, pushState.pushConfig);
+      const next = await inspectPushState();
+      setPushState({ ...next, message: `Notifications enabled for ${currentUser.display_name}.`, error: null });
+    } catch (err) {
+      setPushState((current) => ({ ...current, error: err instanceof Error ? err.message : "Could not enable notifications.", message: null }));
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  async function disableNotifications() {
+    setPushBusy(true);
+    setPushState((current) => ({ ...current, message: null, error: null }));
+    try {
+      await disableCurrentPush();
+      const next = await inspectPushState();
+      setPushState({ ...next, message: "Notifications disabled for this browser.", error: null });
+    } catch (err) {
+      setPushState((current) => ({ ...current, error: err instanceof Error ? err.message : "Could not disable notifications.", message: null }));
+    } finally {
+      setPushBusy(false);
+    }
   }
 
   if (!accessGranted) {
@@ -144,7 +182,7 @@ export function App() {
         <main className="content">
           {loadError ? <div className="notice error">{loadError}</div> : null}
           {refreshing && data ? <div className="notice info">Refreshing data...</div> : null}
-          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData, health, healthError, accessGrantedAt, lockApp) : <LoadingState />}
+          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData, health, healthError, accessGrantedAt, lockApp, pushState, pushBusy, enableNotifications, disableNotifications) : <LoadingState />}
         </main>
         <nav className="mobile-nav" aria-label="Mobile primary">
           {nav.map((item) => {
@@ -171,7 +209,11 @@ function renderRoute(
   health: ApiHealth | null,
   healthError: string | null,
   accessGrantedAt: string | null,
-  lockApp: () => void
+  lockApp: () => void,
+  pushState: PushUiState,
+  pushBusy: boolean,
+  enableNotifications: () => Promise<void>,
+  disableNotifications: () => Promise<void>
 ) {
   switch (route) {
     case "dashboard":
@@ -216,6 +258,10 @@ function renderRoute(
           accessGrantedAt={accessGrantedAt}
           appEnvironment={getAppEnvironment(window.location.hostname)}
           onLockApp={lockApp}
+          pushState={pushState}
+          pushBusy={pushBusy}
+          onEnableNotifications={enableNotifications}
+          onDisableNotifications={disableNotifications}
         />
       );
     case "my-dashboard":

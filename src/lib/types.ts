@@ -105,6 +105,11 @@ export type ApiHealth = {
   checked_at: string;
 };
 
+export type NotificationConfig = {
+  pushEnabled: boolean;
+  vapidPublicKey: string;
+};
+
 export type ApiError = {
   error: string;
 };

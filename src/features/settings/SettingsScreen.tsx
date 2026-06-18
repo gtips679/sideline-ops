@@ -2,6 +2,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { SectionHeader } from "../../components/SectionHeader";
 import { StatusPill } from "../../components/StatusPill";
 import { formatDateTime } from "../../lib/format";
+import type { PushUiState } from "../../lib/push";
 import type { ApiHealth, BootstrapData, User } from "../../lib/types";
 
 type SettingsScreenProps = {
@@ -14,6 +15,10 @@ type SettingsScreenProps = {
   accessGrantedAt: string | null;
   appEnvironment: "local/dev" | "preview" | "production";
   onLockApp: () => void;
+  pushState: PushUiState;
+  pushBusy: boolean;
+  onEnableNotifications: () => Promise<void>;
+  onDisableNotifications: () => Promise<void>;
 };
 
 const futureItems = ["Push notifications", "Auth", "Integrations", "SMS fallback"];
@@ -28,7 +33,15 @@ export function SettingsScreen({
   accessGrantedAt,
   appEnvironment,
   onLockApp,
+  pushState,
+  pushBusy,
+  onEnableNotifications,
+  onDisableNotifications,
 }: SettingsScreenProps) {
+  const pushUnavailableReason = getPushUnavailableReason(pushState);
+  const canEnablePush = !pushBusy && !pushUnavailableReason && pushState.subscriptionStatus !== "subscribed";
+  const canDisablePush = !pushBusy && pushState.subscriptionStatus === "subscribed";
+
   return (
     <>
       <SectionHeader title="Settings" eyebrow="Admin" />
@@ -53,6 +66,29 @@ export function SettingsScreen({
           </div>
           <p className="muted">This is a temporary preview gate, not real staff authentication. The demo persona switcher is still available after access is granted.</p>
           <button className="secondary-button" onClick={onLockApp} type="button">Lock app</button>
+        </section>
+
+        <section className="panel">
+          <h2>Push notifications</h2>
+          <div className="status-list">
+            <StatusRow label="Browser permission" value={pushState.notificationPermission} tone={permissionTone(pushState.notificationPermission)} />
+            <StatusRow label="Service worker support" value={pushState.serviceWorkerSupported ? "Yes" : "No" } tone={pushState.serviceWorkerSupported ? "loaded" : "not-loaded"} />
+            <StatusRow label="Service worker" value={pushState.serviceWorkerStatus} tone={statusTone(pushState.serviceWorkerStatus)} />
+            <StatusRow label="Push subscription" value={pushState.subscriptionStatus} tone={statusTone(pushState.subscriptionStatus)} />
+            <StatusRow label="Push config" value={pushState.pushConfigStatus === "available" ? "Available" : pushState.pushConfigStatus === "missing" ? "Push config missing" : pushState.pushConfigStatus} tone={statusTone(pushState.pushConfigStatus)} />
+          </div>
+          <p className="muted">Milestone 1.0 captures browser subscriptions only. Sideline Ops does not send operational push alerts yet.</p>
+          {pushUnavailableReason ? <div className="notice info">{pushUnavailableReason}</div> : null}
+          {pushState.message ? <div className="notice success">{pushState.message}</div> : null}
+          {pushState.error ? <div className="notice error">{pushState.error}</div> : null}
+          <div className="button-row">
+            <button className="primary-button" disabled={!canEnablePush} onClick={onEnableNotifications} type="button">
+              {pushBusy ? "Working" : "Enable notifications"}
+            </button>
+            <button className="secondary-button" disabled={!canDisablePush} onClick={onDisableNotifications} type="button">
+              Disable notifications
+            </button>
+          </div>
         </section>
 
         <section className="panel">
@@ -106,4 +142,28 @@ function StatusRow({ label, value, tone }: { label: string; value: string; tone:
       <span className={`status-pill status-${tone}`}>{value}</span>
     </div>
   );
+}
+
+function getPushUnavailableReason(state: PushUiState) {
+  if (!state.serviceWorkerSupported) return "Service workers are not supported in this browser.";
+  if (!state.pushSupported) return "Push subscriptions are not supported in this browser.";
+  if (state.notificationPermission === "denied") return "Notifications are blocked for this site in the browser settings.";
+  if (state.pushConfigStatus === "missing") return "Push config missing. Set VAPID_PUBLIC_KEY to enable subscription capture.";
+  if (state.pushConfigStatus === "error") return "Could not load push configuration.";
+  if (state.serviceWorkerStatus === "error") return "Service worker registration failed.";
+  return null;
+}
+
+function permissionTone(permission: PushUiState["notificationPermission"]) {
+  if (permission === "granted") return "loaded";
+  if (permission === "denied") return "error";
+  if (permission === "unsupported") return "not-loaded";
+  return "checking";
+}
+
+function statusTone(status: string) {
+  if (["registered", "subscribed", "available"].includes(status)) return "loaded";
+  if (["error", "unavailable", "unsupported", "denied"].includes(status)) return "error";
+  if (["missing", "not-subscribed", "not-loaded"].includes(status)) return "not-loaded";
+  return "checking";
 }

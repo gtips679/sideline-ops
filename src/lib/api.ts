@@ -1,10 +1,32 @@
 import { demoData } from "./demoData";
-import type { ApiHealth, AvailabilityRequest, AvailabilityResponseValue, BootstrapData, Event, Location, User } from "./types";
+import type { ApiHealth, AvailabilityRequest, AvailabilityResponseValue, BootstrapData, Event, Location, NotificationConfig, User } from "./types";
 
 export async function getApiHealth(): Promise<ApiHealth> {
   const response = await fetch("/api/health");
   if (!response.ok) throw new Error("API health check failed");
   return (await response.json()) as ApiHealth;
+}
+
+export async function getNotificationConfig(): Promise<NotificationConfig> {
+  const response = await fetch("/api/notifications/config");
+  if (!response.ok) throw new Error("Notification config request failed");
+  return (await response.json()) as NotificationConfig;
+}
+
+export async function savePushSubscription(input: {
+  userId: string;
+  endpoint: string;
+  keys: {
+    p256dh: string;
+    auth: string;
+  };
+  userAgent: string;
+}): Promise<void> {
+  await postJson<{ ok: true }>("/api/notifications/subscribe", input);
+}
+
+export async function disablePushSubscription(endpoint: string): Promise<void> {
+  await postJson<{ ok: true }>("/api/notifications/unsubscribe", { endpoint });
 }
 
 export async function verifyAccessCode(code: string): Promise<void> {

@@ -1,6 +1,7 @@
 export type Env = {
   SIDELINE_DB: D1Database;
   SIDELINE_ACCESS_CODE?: string;
+  VAPID_PUBLIC_KEY?: string;
 };
 
 type ApiContext = EventContext<Env, string, unknown>;
@@ -38,6 +39,7 @@ export async function handleApiPath(context: ApiContext, method: string, path: s
 
 async function route(context: ApiContext, method: string, path: string): Promise<Response> {
   if (method === "POST" && path === "access/verify") return verifyAccess(context);
+  if (method === "GET" && path === "notifications/config") return getNotificationConfig(context);
 
   if (!context.env.SIDELINE_DB) {
     return json({ error: "SIDELINE_DB binding is not configured" }, 500);
@@ -54,9 +56,19 @@ async function route(context: ApiContext, method: string, path: string): Promise
   if (method === "GET" && path === "availability-requests") return listAvailabilityRequests(context.env.SIDELINE_DB);
   if (method === "POST" && path === "availability-requests") return createAvailabilityRequest(context);
   if (method === "POST" && path === "availability-responses") return upsertAvailabilityResponse(context);
+  if (method === "POST" && path === "notifications/subscribe") return subscribeToNotifications(context);
+  if (method === "POST" && path === "notifications/unsubscribe") return unsubscribeFromNotifications(context);
   if (method === "GET" && path === "activity") return listActivity(context.env.SIDELINE_DB);
 
   return json({ error: `No route for ${method} /api/${path}` }, 404);
+}
+
+function getNotificationConfig(context: ApiContext): Response {
+  const vapidPublicKey = context.env.VAPID_PUBLIC_KEY || "";
+  return json({
+    pushEnabled: vapidPublicKey.length > 0,
+    vapidPublicKey,
+  });
 }
 
 async function verifyAccess(context: ApiContext): Promise<Response> {
@@ -69,6 +81,53 @@ async function verifyAccess(context: ApiContext): Promise<Response> {
   }
 
   return json({ ok: false, error: "Invalid access code" }, 401);
+}
+
+async function subscribeToNotifications(context: ApiContext): Promise<Response> {
+  const body = await readBody(context.request);
+  const userId = requireString(body.userId, "userId");
+  const endpoint = requireString(body.endpoint, "endpoint");
+  const keys = objectValue(body.keys);
+  const p256dh = requireString(keys?.p256dh, "keys.p256dh");
+  const auth = requireString(keys?.auth, "keys.auth");
+  const userAgent = stringValue(body.userAgent);
+
+  const existing = await context.env.SIDELINE_DB.prepare("SELECT id FROM notification_subscriptions WHERE endpoint = ? LIMIT 1")
+    .bind(endpoint)
+    .first<{ id: string }>();
+
+  if (existing) {
+    await context.env.SIDELINE_DB.prepare(
+      `UPDATE notification_subscriptions
+       SET user_id = ?, p256dh = ?, auth = ?, user_agent = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+      .bind(userId, p256dh, auth, userAgent, existing.id)
+      .run();
+    return json({ ok: true });
+  }
+
+  await context.env.SIDELINE_DB.prepare(
+    `INSERT INTO notification_subscriptions (id, user_id, endpoint, p256dh, auth, user_agent, is_active, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+  )
+    .bind(crypto.randomUUID(), userId, endpoint, p256dh, auth, userAgent)
+    .run();
+
+  return json({ ok: true }, 201);
+}
+
+async function unsubscribeFromNotifications(context: ApiContext): Promise<Response> {
+  const body = await readBody(context.request);
+  const endpoint = requireString(body.endpoint, "endpoint");
+
+  await context.env.SIDELINE_DB.prepare(
+    "UPDATE notification_subscriptions SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE endpoint = ?"
+  )
+    .bind(endpoint)
+    .run();
+
+  return json({ ok: true });
 }
 
 function getHealth(): Response {
@@ -396,6 +455,10 @@ function stringValue(value: JsonValue | undefined): string | null {
 
 function numberValue(value: JsonValue | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function objectValue(value: JsonValue | undefined): Record<string, JsonValue | undefined> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, JsonValue | undefined> : null;
 }
 
 function boolToInt(value: JsonValue | undefined, defaultValue: boolean): number {

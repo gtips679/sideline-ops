@@ -1,6 +1,6 @@
 # Sideline Ops
 
-Milestone 0.5 preview-gated deployable app for Sideline Supplies, a PWA-style concessions and staffing operations app.
+Milestone 1.0 preview-gated deployable app for Sideline Supplies, a PWA-style concessions and staffing operations app.
 
 This project includes:
 
@@ -13,6 +13,7 @@ This project includes:
 - Basic PWA manifest/icons
 - Settings/status screen for API, bootstrap, persona, app version, and environment
 - Temporary preview access gate before the demo persona switcher
+- Push notification opt-in and subscription capture
 
 ## Project Structure
 
@@ -112,6 +113,9 @@ This only affects local `.wrangler` state. Do not run destructive reset commands
 - `GET /api/availability-requests`
 - `POST /api/availability-requests`
 - `POST /api/availability-responses`
+- `GET /api/notifications/config`
+- `POST /api/notifications/subscribe`
+- `POST /api/notifications/unsubscribe`
 - `GET /api/activity`
 
 ## Cloudflare Pages Compatibility
@@ -125,11 +129,19 @@ Current structure is intended for Cloudflare Pages + Pages Functions + D1:
 - Required D1 binding: `SIDELINE_DB`
 - D1 database name: `sideline-ops`
 
-Milestone 0.5 uses one Pages environment variable:
+Preview access uses one Pages environment variable:
 
 ```txt
 SIDELINE_ACCESS_CODE
 ```
+
+Milestone 1.0 adds one more Pages environment variable:
+
+```txt
+VAPID_PUBLIC_KEY
+```
+
+`VAPID_PRIVATE_KEY` will be required later when the app actually sends push notifications. Milestone 1.0 only captures subscriptions and does not send operational alerts.
 
 ## Cloudflare Deployment Checklist
 
@@ -182,27 +194,42 @@ Settings -> Environment variables -> Production -> SIDELINE_ACCESS_CODE
 Settings -> Environment variables -> Preview -> SIDELINE_ACCESS_CODE
 ```
 
+9. Set the VAPID public key in Cloudflare Pages:
+
+```txt
+Settings -> Environment variables -> Production -> VAPID_PUBLIC_KEY
+Settings -> Environment variables -> Preview -> VAPID_PUBLIC_KEY
+```
+
 Do not commit the real access code to the repo.
 
-9. Redeploy after setting or changing environment variables.
+Do not commit VAPID private keys to the repo. The public key can be configured in Pages; the future private key should be handled as a secret.
 
-10. Confirm API health after deploy by opening:
+10. Redeploy after setting or changing environment variables.
+
+11. Confirm API health after deploy by opening:
 
 ```txt
 https://YOUR_DEPLOYED_URL/api/health
 ```
 
-11. Confirm bootstrap/D1 after deploy by opening:
+12. Confirm bootstrap/D1 after deploy by opening:
 
 ```txt
 https://YOUR_DEPLOYED_URL/api/bootstrap
 ```
 
-12. Open the deployed app. The access gate should appear before the main app.
+13. Confirm push config after deploy by opening:
 
-13. Enter the configured preview access code.
+```txt
+https://YOUR_DEPLOYED_URL/api/notifications/config
+```
 
-14. Check Settings. It should show API health, bootstrap loaded, access granted, app version `0.5.0-dev`, and an environment label.
+14. Open the deployed app. The access gate should appear before the main app.
+
+15. Enter the configured preview access code.
+
+16. Check Settings. It should show API health, bootstrap loaded, access granted, app version `1.0.0-dev`, environment, service worker status, notification permission, and push subscription status.
 
 ## Preview Access Gate
 
@@ -220,6 +247,43 @@ Behavior:
 
 For Cloudflare Pages, set `SIDELINE_ACCESS_CODE` separately for both Preview and Production environments, then redeploy.
 
+## Push Notification Opt-In
+
+Milestone 1.0 registers a service worker and lets a browser save or disable a push subscription. It does not send availability-request notifications or any real operational push campaigns yet.
+
+Required for subscription capture:
+
+```txt
+VAPID_PUBLIC_KEY
+```
+
+Future sending will also require:
+
+```txt
+VAPID_PRIVATE_KEY
+```
+
+If `VAPID_PUBLIC_KEY` is missing, `/api/notifications/config` returns `pushEnabled=false`, Settings shows `Push config missing`, and the app continues to work without push.
+
+Generate VAPID keys locally with a one-time command:
+
+```bash
+npx web-push generate-vapid-keys
+```
+
+Copy the public key to Cloudflare Pages as `VAPID_PUBLIC_KEY` for both Preview and Production. Keep the private key out of the repo.
+
+iPhone note: Web push is available only after the app is added to the Home Screen and opened from the Home Screen icon. Permission prompts may not appear in ordinary Safari tab mode.
+
+Notification troubleshooting:
+
+- Use HTTPS or local development.
+- Confirm the app is opened from the Home Screen on iPhone.
+- Check Settings for service worker support and registration status.
+- If permission is `denied`, reset the site/app notification permission in browser or OS settings.
+- If Settings says `Push config missing`, set `VAPID_PUBLIC_KEY` and redeploy.
+- This still uses the demo persona switcher and preview access gate, not real authentication.
+
 ## Deployment Smoke Tests
 
 After deploying, run these from a browser:
@@ -227,6 +291,7 @@ After deploying, run these from a browser:
 ```txt
 https://YOUR_DEPLOYED_URL/api/health
 https://YOUR_DEPLOYED_URL/api/bootstrap
+https://YOUR_DEPLOYED_URL/api/notifications/config
 ```
 
 Then test the app UI:
@@ -245,8 +310,10 @@ Then test the app UI:
 12. Switch back to `Glenn / Admin`.
 13. Open Availability.
 14. Confirm Yes/No/Maybe/No response counts only include targeted staff.
-15. Open Settings and confirm API status, access status, app version, and environment.
-16. Click Lock app and confirm the access gate returns.
+15. Open Settings and confirm API status, access status, app version, environment, service worker status, and push config status.
+16. If `VAPID_PUBLIC_KEY` is configured, click Enable notifications and confirm subscription status changes to subscribed.
+17. Click Disable notifications and confirm subscription status changes to not subscribed.
+18. Click Lock app and confirm the access gate returns.
 
 ## Phone Test Checklist
 
@@ -263,10 +330,12 @@ Use the deployed HTTPS URL for phone testing.
 9. Switch to Glenn/Admin and inspect Dashboard, Staff, Events, Availability, and Settings.
 10. Confirm mobile admin tables display as cards.
 11. Confirm Settings shows API health, access status, environment, and app version.
-12. Tap Lock app in Settings and confirm the gate returns.
-13. On Android Chrome, open the deployed URL.
-14. Use Install app or Add to Home screen.
-15. Open from the icon and repeat the access/staff/admin checks.
+12. Confirm Settings shows service worker, notification permission, push config, and subscription status.
+13. If `VAPID_PUBLIC_KEY` is configured, test Enable notifications and Disable notifications.
+14. Tap Lock app in Settings and confirm the gate returns.
+15. On Android Chrome, open the deployed URL.
+16. Use Install app or Add to Home screen.
+17. Open from the icon and repeat the access/staff/admin/push-readiness checks.
 
 ## Database Safety
 
