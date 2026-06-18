@@ -323,7 +323,8 @@ th {
 .status-admin,
 .status-online,
 .status-loaded,
-.status-hosted {
+.status-hosted,
+.status-production {
   background: #dceee4;
   color: #18543c;
 }
@@ -339,7 +340,8 @@ th {
 .status-planning,
 .status-manager,
 .status-checking,
-.status-local-dev {
+.status-local-dev,
+.status-preview {
   background: #f1e8cb;
   color: #705712;
 }

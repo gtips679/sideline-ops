@@ -11,7 +11,7 @@ type SettingsScreenProps = {
   data: BootstrapData;
   health: ApiHealth | null;
   healthError: string | null;
-  isLocalLike: boolean;
+  appEnvironment: "local/dev" | "preview" | "production";
 };
 
 const futureItems = ["Push notifications", "Auth", "Integrations", "SMS fallback"];
@@ -23,7 +23,7 @@ export function SettingsScreen({
   data,
   health,
   healthError,
-  isLocalLike,
+  appEnvironment,
 }: SettingsScreenProps) {
   return (
     <>
@@ -32,10 +32,10 @@ export function SettingsScreen({
         <section className="panel">
           <h2>Deployment status</h2>
           <div className="status-list">
-            <StatusRow label="API health" value={health?.ok ? "Online" : healthError ? "Error" : "Checking"} tone={health?.ok ? "yes" : healthError ? "no" : "maybe"} />
-            <StatusRow label="Database/bootstrap" value={bootstrapLoaded ? "Loaded" : "Not loaded"} tone={bootstrapLoaded ? "yes" : "no"} />
+            <StatusRow label="API health" value={health?.ok ? "Online" : healthError ? "Error" : "Checking"} tone={health?.ok ? "online" : healthError ? "error" : "checking"} />
+            <StatusRow label="Database/bootstrap" value={bootstrapLoaded ? "Loaded" : "Not loaded"} tone={bootstrapLoaded ? "loaded" : "not-loaded"} />
             <StatusRow label="App build" value={appVersion} tone="open" />
-            <StatusRow label="Environment" value={isLocalLike ? "Local dev" : "Hosted"} tone={isLocalLike ? "maybe" : "yes"} />
+            <StatusRow label="Environment" value={appEnvironment} tone={appEnvironment === "production" ? "production" : appEnvironment === "preview" ? "preview" : "local-dev"} />
           </div>
           {health ? <p className="muted">Last health check: {formatDateTime(health.checked_at)}</p> : null}
           {healthError ? <div className="notice error">{healthError}</div> : null}
@@ -89,7 +89,7 @@ function StatusRow({ label, value, tone }: { label: string; value: string; tone:
   return (
     <div className="status-row">
       <span>{label}</span>
-      <StatusPill status={tone === "yes" ? value : tone === "no" ? value : tone === "maybe" ? value : value} />
+      <span className={`status-pill status-${tone}`}>{value}</span>
     </div>
   );
 }

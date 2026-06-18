@@ -22,7 +22,7 @@ const personaUserIds: Record<PersonaKey, string> = {
   staff: "user_ava",
 };
 
-const appVersion = "Milestone 0.3";
+const appVersion = "0.4.0-dev";
 
 export function App() {
   const [data, setData] = useState<BootstrapData | null>(null);
@@ -184,7 +184,7 @@ function renderRoute(
           data={data}
           health={health}
           healthError={healthError}
-          isLocalLike={window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"}
+          appEnvironment={getAppEnvironment(window.location.hostname)}
         />
       );
     case "my-dashboard":
@@ -208,6 +208,12 @@ function renderRoute(
     default:
       return null;
   }
+}
+
+function getAppEnvironment(hostname: string): "local/dev" | "preview" | "production" {
+  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "") return "local/dev";
+  if (hostname.endsWith(".pages.dev") && hostname !== "sideline-ops.pages.dev") return "preview";
+  return "production";
 }
 
 function LoadingState() {
