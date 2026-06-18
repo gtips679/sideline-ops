@@ -14,12 +14,22 @@ type DbPushSubscription = {
   endpoint: string;
   p256dh: string;
   auth: string;
+  device_id: string | null;
+  device_label: string | null;
+  is_active?: number;
+  created_at?: string;
+  updated_at?: string;
+  last_seen_at?: string | null;
 };
 type TestPushResult = {
   id: string;
-  endpoint: string;
+  device_id: string | null;
+  device_id_short: string | null;
+  device_label: string | null;
+  endpoint_host: string;
   ok: boolean;
   status: number | null;
+  marked_inactive: boolean;
   error?: string;
 };
 
@@ -75,6 +85,7 @@ async function route(context: ApiContext, method: string, path: string): Promise
   if (method === "POST" && path === "notifications/subscribe") return subscribeToNotifications(context);
   if (method === "POST" && path === "notifications/unsubscribe") return unsubscribeFromNotifications(context);
   if (method === "POST" && path === "notifications/test-send") return sendTestNotification(context);
+  if (method === "GET" && path === "notifications/subscriptions") return listNotificationSubscriptions(context);
   if (method === "GET" && path === "activity") return listActivity(context.env.SIDELINE_DB);
 
   return json({ error: `No route for ${method} /api/${path}` }, 404);
@@ -104,6 +115,8 @@ async function verifyAccess(context: ApiContext): Promise<Response> {
 async function subscribeToNotifications(context: ApiContext): Promise<Response> {
   const body = await readBody(context.request);
   const userId = requireString(body.userId, "userId");
+  const deviceId = requireString(body.deviceId, "deviceId");
+  const deviceLabel = requireString(body.deviceLabel, "deviceLabel");
   const endpoint = requireString(body.endpoint, "endpoint");
   const keys = objectValue(body.keys);
   const p256dh = requireString(keys?.p256dh, "keys.p256dh");
@@ -117,43 +130,81 @@ async function subscribeToNotifications(context: ApiContext): Promise<Response> 
   if (existing) {
     await context.env.SIDELINE_DB.prepare(
       `UPDATE notification_subscriptions
-       SET user_id = ?, p256dh = ?, auth = ?, user_agent = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+       SET user_id = ?, device_id = ?, device_label = ?, p256dh = ?, auth = ?, user_agent = ?,
+           is_active = 1, last_seen_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`
     )
-      .bind(userId, p256dh, auth, userAgent, existing.id)
+      .bind(userId, deviceId, deviceLabel, p256dh, auth, userAgent, existing.id)
       .run();
-    return json({ ok: true });
+    return json({ ok: true, subscription: await getNotificationSubscriptionById(context.env.SIDELINE_DB, existing.id, deviceId) });
   }
 
+  const id = crypto.randomUUID();
   await context.env.SIDELINE_DB.prepare(
-    `INSERT INTO notification_subscriptions (id, user_id, endpoint, p256dh, auth, user_agent, is_active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+    `INSERT INTO notification_subscriptions (id, user_id, device_id, device_label, endpoint, p256dh, auth, user_agent, is_active, created_at, updated_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
   )
-    .bind(crypto.randomUUID(), userId, endpoint, p256dh, auth, userAgent)
+    .bind(id, userId, deviceId, deviceLabel, endpoint, p256dh, auth, userAgent)
     .run();
 
-  return json({ ok: true }, 201);
+  return json({ ok: true, subscription: await getNotificationSubscriptionById(context.env.SIDELINE_DB, id, deviceId) }, 201);
 }
 
 async function unsubscribeFromNotifications(context: ApiContext): Promise<Response> {
   const body = await readBody(context.request);
-  const endpoint = requireString(body.endpoint, "endpoint");
+  const endpoint = stringValue(body.endpoint);
+  const deviceId = stringValue(body.deviceId);
 
-  await context.env.SIDELINE_DB.prepare(
-    "UPDATE notification_subscriptions SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE endpoint = ?"
+  if (!endpoint && !deviceId) throw new Error("Missing endpoint or deviceId");
+
+  const result = endpoint
+    ? await context.env.SIDELINE_DB.prepare(
+        "UPDATE notification_subscriptions SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE endpoint = ?"
+      )
+        .bind(endpoint)
+        .run()
+    : await context.env.SIDELINE_DB.prepare(
+        "UPDATE notification_subscriptions SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE device_id = ? AND is_active = 1"
+      )
+        .bind(deviceId)
+        .run();
+
+  return json({ ok: true, updated: result.meta.changes ?? 0 });
+}
+
+async function listNotificationSubscriptions(context: ApiContext): Promise<Response> {
+  const url = new URL(context.request.url);
+  const userId = url.searchParams.get("userId")?.trim();
+  const deviceId = url.searchParams.get("deviceId")?.trim() || null;
+
+  if (!userId) throw new Error("Missing userId");
+
+  const result = await context.env.SIDELINE_DB.prepare(
+    `SELECT id, user_id, device_id, device_label, endpoint, is_active, created_at, updated_at, last_seen_at
+     FROM notification_subscriptions
+     WHERE user_id = ?
+     ORDER BY is_active DESC, updated_at DESC`
   )
-    .bind(endpoint)
-    .run();
+    .bind(userId)
+    .all<DbPushSubscription>();
 
-  return json({ ok: true });
+  return json({
+    subscriptions: result.results.map((subscription) => safeSubscription(subscription, deviceId)),
+  });
 }
 
 async function sendTestNotification(context: ApiContext): Promise<Response> {
   const body = await readBody(context.request);
   const userId = requireString(body.userId, "userId");
+  const target = requireString(body.target, "target");
+  const deviceId = requireString(body.deviceId, "deviceId");
   const vapidPublicKey = context.env.VAPID_PUBLIC_KEY || "";
   const vapidPrivateKey = context.env.VAPID_PRIVATE_KEY || "";
   const vapidSubject = context.env.VAPID_SUBJECT || "";
+
+  if (!["current-device", "all-user-devices"].includes(target)) {
+    throw new Error("Invalid target");
+  }
 
   if (!vapidPublicKey || !vapidPrivateKey || !vapidSubject) {
     return json(
@@ -165,8 +216,17 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
     );
   }
 
-  const subscriptions = await context.env.SIDELINE_DB.prepare(
-    `SELECT id, user_id, endpoint, p256dh, auth
+  const subscriptions = target === "current-device"
+    ? await context.env.SIDELINE_DB.prepare(
+      `SELECT id, user_id, device_id, device_label, endpoint, p256dh, auth
+       FROM notification_subscriptions
+       WHERE user_id = ? AND device_id = ? AND is_active = 1
+       ORDER BY updated_at DESC`
+    )
+      .bind(userId, deviceId)
+      .all<DbPushSubscription>()
+    : await context.env.SIDELINE_DB.prepare(
+    `SELECT id, user_id, device_id, device_label, endpoint, p256dh, auth
      FROM notification_subscriptions
      WHERE user_id = ? AND is_active = 1
      ORDER BY updated_at DESC`
@@ -191,9 +251,13 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
       const ok = response.ok || response.status === 201;
       const result: TestPushResult = {
         id: subscription.id,
-        endpoint: subscription.endpoint,
+        device_id: subscription.device_id,
+        device_id_short: subscription.device_id ? shortenId(subscription.device_id) : null,
+        device_label: subscription.device_label,
+        endpoint_host: endpointHost(subscription.endpoint),
         ok,
         status: response.status,
+        marked_inactive: false,
       };
 
       if (!ok) {
@@ -202,15 +266,20 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
 
       if (response.status === 404 || response.status === 410) {
         await markNotificationSubscriptionInactive(context.env.SIDELINE_DB, subscription.id);
+        result.marked_inactive = true;
       }
 
       results.push(result);
     } catch (err) {
       results.push({
         id: subscription.id,
-        endpoint: subscription.endpoint,
+        device_id: subscription.device_id,
+        device_id_short: subscription.device_id ? shortenId(subscription.device_id) : null,
+        device_label: subscription.device_label,
+        endpoint_host: endpointHost(subscription.endpoint),
         ok: false,
         status: null,
+        marked_inactive: false,
         error: err instanceof Error ? err.message : "Push send failed.",
       });
     }
@@ -223,12 +292,54 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
     attempted: subscriptions.results.length,
     sent,
     failed,
+    target,
+    devicesAttempted: new Set(subscriptions.results.map((subscription) => subscription.device_id).filter(Boolean)).size,
     results,
   });
 }
 
 async function markNotificationSubscriptionInactive(db: D1Database, id: string) {
   await db.prepare("UPDATE notification_subscriptions SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
+}
+
+async function getNotificationSubscriptionById(db: D1Database, id: string, currentDeviceId: string | null) {
+  const subscription = await db
+    .prepare(
+      `SELECT id, user_id, device_id, device_label, endpoint, is_active, created_at, updated_at, last_seen_at
+       FROM notification_subscriptions
+       WHERE id = ?`
+    )
+    .bind(id)
+    .first<DbPushSubscription>();
+
+  return subscription ? safeSubscription(subscription, currentDeviceId) : null;
+}
+
+function safeSubscription(subscription: DbPushSubscription, currentDeviceId: string | null) {
+  return {
+    id: subscription.id,
+    user_id: subscription.user_id,
+    device_id: subscription.device_id,
+    device_label: subscription.device_label,
+    endpoint_host: endpointHost(subscription.endpoint),
+    is_active: Number(subscription.is_active ?? 0),
+    created_at: subscription.created_at,
+    updated_at: subscription.updated_at,
+    last_seen_at: subscription.last_seen_at ?? null,
+    is_current_device: Boolean(currentDeviceId && subscription.device_id === currentDeviceId),
+  };
+}
+
+function endpointHost(endpoint: string): string {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return "invalid-endpoint";
+  }
+}
+
+function shortenId(id: string): string {
+  return id.length <= 8 ? id : id.slice(0, 8);
 }
 
 async function sendWebPush(

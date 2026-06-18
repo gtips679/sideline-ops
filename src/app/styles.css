@@ -371,6 +371,55 @@ th {
   border-top: 1px solid #dfe5dd;
 }
 
+.push-diagnostics-panel {
+  align-content: start;
+}
+
+.local-test-button {
+  justify-self: start;
+  margin-top: 10px;
+}
+
+.device-list,
+.test-result-list,
+.troubleshooting-list {
+  display: grid;
+  gap: 8px;
+}
+
+.device-list article {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #dfe5dd;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.device-list article.current-device {
+  border-color: #8fc6a6;
+}
+
+.device-list article > div:first-child,
+.device-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.device-list span,
+.device-meta span,
+.test-result-list span,
+.troubleshooting-list p {
+  color: #647069;
+  font-size: 0.88rem;
+}
+
+.test-result-list {
+  margin-top: 8px;
+}
+
 .choice-button {
   min-width: 96px;
   min-height: 42px;

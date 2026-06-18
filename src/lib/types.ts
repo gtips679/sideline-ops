@@ -113,9 +113,13 @@ export type NotificationConfig = {
 
 export type TestPushResult = {
   id: string;
-  endpoint: string;
+  device_id?: string | null;
+  device_id_short?: string | null;
+  device_label?: string | null;
+  endpoint_host?: string;
   ok: boolean;
   status: number | null;
+  marked_inactive?: boolean;
   error?: string;
 };
 
@@ -124,7 +128,26 @@ export type TestPushSummary = {
   attempted: number;
   sent: number;
   failed: number;
+  target?: "current-device" | "all-user-devices";
+  devicesAttempted?: number;
   results: TestPushResult[];
+};
+
+export type PushSubscriptionInfo = {
+  id: string;
+  user_id: string;
+  device_id: string | null;
+  device_label: string | null;
+  endpoint_host: string;
+  is_active: number;
+  created_at: string;
+  updated_at: string;
+  last_seen_at: string | null;
+  is_current_device: boolean;
+};
+
+export type PushSubscriptionsResponse = {
+  subscriptions: PushSubscriptionInfo[];
 };
 
 export type ApiError = {

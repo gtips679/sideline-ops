@@ -1,4 +1,5 @@
 import { disablePushSubscription, getNotificationConfig, savePushSubscription } from "./api";
+import type { ClientDeviceInfo } from "./device";
 import type { NotificationConfig } from "./types";
 
 export type PushUiState = {
@@ -82,7 +83,7 @@ export async function inspectPushState(): Promise<PushUiState> {
   }
 }
 
-export async function enablePushForUser(userId: string, currentConfig: NotificationConfig | null) {
+export async function enablePushForUser(userId: string, device: ClientDeviceInfo, currentConfig: NotificationConfig | null) {
   if (!("Notification" in window)) throw new Error("Browser notifications are not supported.");
   if (!("serviceWorker" in navigator)) throw new Error("Service workers are not supported.");
   if (!("PushManager" in window)) throw new Error("Push subscriptions are not supported.");
@@ -105,6 +106,8 @@ export async function enablePushForUser(userId: string, currentConfig: Notificat
 
   await savePushSubscription({
     userId,
+    deviceId: device.id,
+    deviceLabel: device.label,
     endpoint: subscription.endpoint,
     keys: {
       p256dh: json.keys.p256dh,
@@ -114,16 +117,36 @@ export async function enablePushForUser(userId: string, currentConfig: Notificat
   });
 }
 
-export async function disableCurrentPush() {
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+export async function disableCurrentPush(device: ClientDeviceInfo) {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    await disablePushSubscription({ deviceId: device.id });
+    return;
+  }
 
   const registration = await navigator.serviceWorker.ready;
   const subscription = await registration.pushManager.getSubscription();
-  if (!subscription) return;
+  if (!subscription) {
+    await disablePushSubscription({ deviceId: device.id });
+    return;
+  }
 
   const endpoint = subscription.endpoint;
   await subscription.unsubscribe();
-  await disablePushSubscription(endpoint);
+  await disablePushSubscription({ endpoint, deviceId: device.id });
+}
+
+export async function showLocalTestNotification() {
+  if (!("Notification" in window)) throw new Error("Browser notifications are not supported.");
+  if (Notification.permission !== "granted") throw new Error("Notification permission is not granted for this device.");
+  if (!("serviceWorker" in navigator)) throw new Error("Service workers are not supported.");
+
+  const registration = await navigator.serviceWorker.ready;
+  await registration.showNotification("Sideline Ops", {
+    body: "Local notification test from this device.",
+    icon: "/icon.svg",
+    badge: "/icon-maskable.svg",
+    data: { url: "/" },
+  });
 }
 
 function urlBase64ToUint8Array(value: string) {

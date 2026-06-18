@@ -1,9 +1,10 @@
 import { EmptyState } from "../../components/EmptyState";
 import { SectionHeader } from "../../components/SectionHeader";
 import { StatusPill } from "../../components/StatusPill";
+import type { ClientDeviceInfo } from "../../lib/device";
 import { formatDateTime } from "../../lib/format";
 import type { PushUiState } from "../../lib/push";
-import type { ApiHealth, BootstrapData, TestPushSummary, User } from "../../lib/types";
+import type { ApiHealth, BootstrapData, PushSubscriptionInfo, TestPushSummary, User } from "../../lib/types";
 
 type SettingsScreenProps = {
   appVersion: string;
@@ -19,10 +20,16 @@ type SettingsScreenProps = {
   pushBusy: boolean;
   onEnableNotifications: () => Promise<void>;
   onDisableNotifications: () => Promise<void>;
+  deviceInfo: ClientDeviceInfo;
+  subscriptions: PushSubscriptionInfo[];
+  subscriptionsError: string | null;
   testPushBusy: boolean;
   testPushResult: TestPushSummary | null;
   testPushError: string | null;
-  onSendTestNotification: () => Promise<void>;
+  onSendTestNotification: (target: "current-device" | "all-user-devices") => Promise<void>;
+  localNotificationMessage: string | null;
+  localNotificationError: string | null;
+  onShowLocalNotification: () => Promise<void>;
 };
 
 const futureItems = ["Push notifications", "Auth", "Integrations", "SMS fallback"];
@@ -41,15 +48,24 @@ export function SettingsScreen({
   pushBusy,
   onEnableNotifications,
   onDisableNotifications,
+  deviceInfo,
+  subscriptions,
+  subscriptionsError,
   testPushBusy,
   testPushResult,
   testPushError,
   onSendTestNotification,
+  localNotificationMessage,
+  localNotificationError,
+  onShowLocalNotification,
 }: SettingsScreenProps) {
   const pushUnavailableReason = getPushUnavailableReason(pushState);
   const canEnablePush = !pushBusy && !pushUnavailableReason && pushState.subscriptionStatus !== "subscribed";
   const canDisablePush = !pushBusy && pushState.subscriptionStatus === "subscribed";
-  const canSendTestPush = !testPushBusy && pushState.subscriptionStatus === "subscribed";
+  const activeSubscriptions = subscriptions.filter((subscription) => subscription.is_active === 1);
+  const currentDeviceSubscriptions = activeSubscriptions.filter((subscription) => subscription.is_current_device);
+  const canSendCurrentDevicePush = !testPushBusy && currentDeviceSubscriptions.length > 0;
+  const canSendAllDevicePush = !testPushBusy && activeSubscriptions.length > 0;
 
   return (
     <>
@@ -77,16 +93,18 @@ export function SettingsScreen({
           <button className="secondary-button" onClick={onLockApp} type="button">Lock app</button>
         </section>
 
-        <section className="panel">
-          <h2>Push notifications</h2>
+        <section className="panel push-diagnostics-panel">
+          <h2>This device</h2>
           <div className="status-list">
+            <StatusRow label="Device label" value={deviceInfo.label} tone="open" />
+            <StatusRow label="Device id" value={deviceInfo.shortId} tone="open" />
             <StatusRow label="Browser permission" value={pushState.notificationPermission} tone={permissionTone(pushState.notificationPermission)} />
             <StatusRow label="Service worker support" value={pushState.serviceWorkerSupported ? "Yes" : "No" } tone={pushState.serviceWorkerSupported ? "loaded" : "not-loaded"} />
             <StatusRow label="Service worker" value={pushState.serviceWorkerStatus} tone={statusTone(pushState.serviceWorkerStatus)} />
-            <StatusRow label="Push subscription" value={pushState.subscriptionStatus} tone={statusTone(pushState.subscriptionStatus)} />
+            <StatusRow label="This device push" value={pushState.subscriptionStatus} tone={statusTone(pushState.subscriptionStatus)} />
             <StatusRow label="Push config" value={pushState.pushConfigStatus === "available" ? "Available" : pushState.pushConfigStatus === "missing" ? "Push config missing" : pushState.pushConfigStatus} tone={statusTone(pushState.pushConfigStatus)} />
           </div>
-          <p className="muted">Milestone 1.1 can send a manual test notification to the current persona. Operational push alerts are still out of scope.</p>
+          <p className="muted">Push subscriptions are per browser/device. This status only describes the browser or installed PWA you are using right now.</p>
           {pushUnavailableReason ? <div className="notice info">{pushUnavailableReason}</div> : null}
           {pushState.message ? <div className="notice success">{pushState.message}</div> : null}
           {pushState.error ? <div className="notice error">{pushState.error}</div> : null}
@@ -98,26 +116,67 @@ export function SettingsScreen({
               Disable notifications
             </button>
           </div>
-          <div className="test-push-box">
-            <strong>Manual test push</strong>
-            {pushState.subscriptionStatus === "subscribed" ? (
-              <span>Send a test notification to active subscriptions for {currentUser.display_name}.</span>
-            ) : (
-              <span>Subscribe first.</span>
-            )}
-            {pushState.pushConfig?.testPushEnabled === false ? (
-              <span className="muted">Server sending also requires VAPID_PRIVATE_KEY and VAPID_SUBJECT.</span>
-            ) : null}
-            <button className="secondary-button" disabled={!canSendTestPush} onClick={onSendTestNotification} type="button">
-              {testPushBusy ? "Sending" : "Send test notification to this device/user"}
+          <button className="secondary-button local-test-button" onClick={onShowLocalNotification} type="button">Show local test notification</button>
+          {localNotificationMessage ? <div className="notice success">{localNotificationMessage}</div> : null}
+          {localNotificationError ? <div className="notice error">{localNotificationError}</div> : null}
+        </section>
+
+        <section className="panel push-diagnostics-panel">
+          <h2>Selected persona devices</h2>
+          <div className="summary-block">
+            <strong>{currentUser.display_name}</strong>
+            <span>{currentUser.email ?? "No email set"}</span>
+            <StatusPill status={currentUser.role} />
+          </div>
+          <div className="status-list">
+            <StatusRow label="Active devices" value={String(activeSubscriptions.length)} tone={activeSubscriptions.length > 0 ? "loaded" : "not-loaded"} />
+            <StatusRow label="Current device active" value={currentDeviceSubscriptions.length > 0 ? "Yes" : "No"} tone={currentDeviceSubscriptions.length > 0 ? "loaded" : "not-loaded"} />
+          </div>
+          {subscriptionsError ? <div className="notice error">{subscriptionsError}</div> : null}
+          {subscriptions.length === 0 ? (
+            <EmptyState title="No subscribed devices yet" message="Enable notifications on a browser or installed PWA while this persona is selected." />
+          ) : (
+            <div className="device-list">
+              {subscriptions.map((subscription) => (
+                <article key={subscription.id} className={subscription.is_current_device ? "current-device" : ""}>
+                  <div>
+                    <strong>{subscription.device_label ?? "Unknown device"}</strong>
+                    <span>{subscription.endpoint_host}</span>
+                  </div>
+                  <div className="device-meta">
+                    {subscription.is_current_device ? <span className="status-pill status-loaded">Current device</span> : null}
+                    <span className={`status-pill ${subscription.is_active ? "status-loaded" : "status-not-loaded"}`}>{subscription.is_active ? "active" : "inactive"}</span>
+                    <span>{subscription.last_seen_at ? `Seen ${formatDateTime(subscription.last_seen_at)}` : `Updated ${formatDateTime(subscription.updated_at)}`}</span>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="panel push-diagnostics-panel">
+          <h2>Test push</h2>
+          <p className="muted">Send a manual server push to the current device only or every active device for the selected persona. Operational alerts are still out of scope.</p>
+          {pushState.pushConfig?.testPushEnabled === false ? (
+            <div className="notice info">Server sending also requires VAPID_PRIVATE_KEY and VAPID_SUBJECT.</div>
+          ) : null}
+          {currentDeviceSubscriptions.length === 0 ? <div className="notice info">Subscribe this device before sending a current-device test.</div> : null}
+          <div className="button-row">
+            <button className="secondary-button" disabled={!canSendCurrentDevicePush} onClick={() => onSendTestNotification("current-device")} type="button">
+              {testPushBusy ? "Sending" : "Send test push to current device only"}
+            </button>
+            <button className="secondary-button" disabled={!canSendAllDevicePush} onClick={() => onSendTestNotification("all-user-devices")} type="button">
+              {testPushBusy ? "Sending" : "Send test push to all devices for this user"}
             </button>
           </div>
-          {testPushResult ? (
-            <div className={testPushResult.failed > 0 ? "notice info" : "notice success"}>
-              Test push attempted {testPushResult.attempted}, sent {testPushResult.sent}, failed {testPushResult.failed}.
-            </div>
-          ) : null}
+          {testPushResult ? <TestPushResultSummary result={testPushResult} /> : null}
           {testPushError ? <div className="notice error">{testPushError}</div> : null}
+          <div className="troubleshooting-list">
+            <p>On iPhone, subscribe from the Home Screen installed app.</p>
+            <p>If local test works but server push does not, check VAPID, delivery, and subscription targeting.</p>
+            <p>If local test fails, check permission, PWA install mode, and service worker registration.</p>
+            <p>If the wrong device receives the push, check the selected persona and device list.</p>
+          </div>
         </section>
 
         <section className="panel">
@@ -161,6 +220,25 @@ export function SettingsScreen({
         </section>
       </div>
     </>
+  );
+}
+
+function TestPushResultSummary({ result }: { result: TestPushSummary }) {
+  return (
+    <div className={result.failed > 0 ? "notice info" : "notice success"}>
+      <strong>Test push {result.target ?? "manual"}:</strong> attempted {result.attempted}, sent {result.sent}, failed {result.failed}, devices attempted {result.devicesAttempted ?? 0}.
+      {result.results.length > 0 ? (
+        <div className="test-result-list">
+          {result.results.map((item) => (
+            <span key={item.id}>
+              {item.device_label ?? "Unknown device"} ({item.device_id_short ?? "no id"}, {item.endpoint_host}) - {item.ok ? "sent" : "failed"}
+              {item.status ? ` ${item.status}` : ""}
+              {item.marked_inactive ? " marked inactive" : ""}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

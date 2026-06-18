@@ -1,5 +1,5 @@
 import { demoData } from "./demoData";
-import type { ApiHealth, AvailabilityRequest, AvailabilityResponseValue, BootstrapData, Event, Location, NotificationConfig, TestPushSummary, User } from "./types";
+import type { ApiHealth, AvailabilityRequest, AvailabilityResponseValue, BootstrapData, Event, Location, NotificationConfig, PushSubscriptionInfo, PushSubscriptionsResponse, TestPushSummary, User } from "./types";
 
 export async function getApiHealth(): Promise<ApiHealth> {
   const response = await fetch("/api/health");
@@ -15,6 +15,8 @@ export async function getNotificationConfig(): Promise<NotificationConfig> {
 
 export async function savePushSubscription(input: {
   userId: string;
+  deviceId: string;
+  deviceLabel: string;
   endpoint: string;
   keys: {
     p256dh: string;
@@ -25,12 +27,24 @@ export async function savePushSubscription(input: {
   await postJson<{ ok: true }>("/api/notifications/subscribe", input);
 }
 
-export async function disablePushSubscription(endpoint: string): Promise<void> {
-  await postJson<{ ok: true }>("/api/notifications/unsubscribe", { endpoint });
+export async function disablePushSubscription(input: { endpoint?: string; deviceId: string }): Promise<void> {
+  await postJson<{ ok: true }>("/api/notifications/unsubscribe", input);
 }
 
-export async function sendTestPushNotification(userId: string): Promise<TestPushSummary> {
-  return postJson<TestPushSummary>("/api/notifications/test-send", { userId });
+export async function sendTestPushNotification(input: {
+  userId: string;
+  target: "current-device" | "all-user-devices";
+  deviceId: string;
+}): Promise<TestPushSummary> {
+  return postJson<TestPushSummary>("/api/notifications/test-send", input);
+}
+
+export async function getPushSubscriptions(userId: string, deviceId: string): Promise<PushSubscriptionInfo[]> {
+  const params = new URLSearchParams({ userId, deviceId });
+  const response = await fetch(`/api/notifications/subscriptions?${params.toString()}`);
+  if (!response.ok) throw new Error("Push subscriptions request failed");
+  const payload = (await response.json()) as PushSubscriptionsResponse;
+  return payload.subscriptions;
 }
 
 export async function verifyAccessCode(code: string): Promise<void> {

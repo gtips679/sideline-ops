@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { PlaceholderPanel } from "../components/PlaceholderPanel";
 import { SectionHeader } from "../components/SectionHeader";
-import { getApiHealth, getBootstrap, sendTestPushNotification } from "../lib/api";
-import { disableCurrentPush, enablePushForUser, initialPushUiState, inspectPushState, type PushUiState } from "../lib/push";
-import type { ApiHealth, AvailabilityRequest, BootstrapData, PersonaKey, TestPushSummary, User } from "../lib/types";
+import { getApiHealth, getBootstrap, getPushSubscriptions, sendTestPushNotification } from "../lib/api";
+import { getClientDeviceInfo, type ClientDeviceInfo } from "../lib/device";
+import { disableCurrentPush, enablePushForUser, initialPushUiState, inspectPushState, showLocalTestNotification, type PushUiState } from "../lib/push";
+import type { ApiHealth, AvailabilityRequest, BootstrapData, PersonaKey, PushSubscriptionInfo, TestPushSummary, User } from "../lib/types";
 import { AvailabilityScreen } from "../features/availability/AvailabilityScreen";
 import { StaffRequestsScreen } from "../features/availability/StaffRequestsScreen";
 import { ChecklistsPlaceholder } from "../features/checklists/ChecklistsPlaceholder";
@@ -25,7 +26,7 @@ const personaUserIds: Record<PersonaKey, string> = {
   staff: "user_ava",
 };
 
-const appVersion = "1.1.0-dev";
+const appVersion = "1.1.1-dev";
 
 export function App() {
   const [data, setData] = useState<BootstrapData | null>(null);
@@ -34,9 +35,14 @@ export function App() {
   const [healthError, setHealthError] = useState<string | null>(null);
   const [pushState, setPushState] = useState<PushUiState>(initialPushUiState);
   const [pushBusy, setPushBusy] = useState(false);
+  const [deviceInfo] = useState<ClientDeviceInfo>(() => getClientDeviceInfo());
+  const [subscriptions, setSubscriptions] = useState<PushSubscriptionInfo[]>([]);
+  const [subscriptionsError, setSubscriptionsError] = useState<string | null>(null);
   const [testPushBusy, setTestPushBusy] = useState(false);
   const [testPushResult, setTestPushResult] = useState<TestPushSummary | null>(null);
   const [testPushError, setTestPushError] = useState<string | null>(null);
+  const [localNotificationMessage, setLocalNotificationMessage] = useState<string | null>(null);
+  const [localNotificationError, setLocalNotificationError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [accessGranted, setAccessGranted] = useState(() => getStoredAccess().granted);
   const [accessGrantedAt, setAccessGrantedAt] = useState<string | null>(() => getStoredAccess().grantedAt);
@@ -95,6 +101,17 @@ export function App() {
     setPushState(await inspectPushState());
   }
 
+  async function refreshSubscriptions(userId = currentUser?.id) {
+    if (!userId) return;
+    setSubscriptionsError(null);
+    try {
+      setSubscriptions(await getPushSubscriptions(userId, deviceInfo.id));
+    } catch (err) {
+      setSubscriptions([]);
+      setSubscriptionsError(err instanceof Error ? err.message : "Could not load push subscriptions.");
+    }
+  }
+
   const currentUser = useMemo(() => {
     if (!data) return null;
     return data.users.find((user) => user.id === personaUserIds[persona]) ?? data.users[0] ?? null;
@@ -102,6 +119,12 @@ export function App() {
 
   const isStaffView = persona === "staff";
   const nav = isStaffView ? staffNav : adminNav;
+
+  useEffect(() => {
+    if (accessGranted && currentUser) {
+      refreshSubscriptions(currentUser.id);
+    }
+  }, [accessGranted, currentUser?.id]);
 
   useEffect(() => {
     setRoute(isStaffView ? "my-dashboard" : "dashboard");
@@ -122,9 +145,10 @@ export function App() {
     setTestPushError(null);
     setPushState((current) => ({ ...current, message: null, error: null }));
     try {
-      await enablePushForUser(currentUser.id, pushState.pushConfig);
+      await enablePushForUser(currentUser.id, deviceInfo, pushState.pushConfig);
       const next = await inspectPushState();
       setPushState({ ...next, message: `Notifications enabled for ${currentUser.display_name}.`, error: null });
+      await refreshSubscriptions(currentUser.id);
     } catch (err) {
       setPushState((current) => ({ ...current, error: err instanceof Error ? err.message : "Could not enable notifications.", message: null }));
     } finally {
@@ -138,9 +162,10 @@ export function App() {
     setTestPushError(null);
     setPushState((current) => ({ ...current, message: null, error: null }));
     try {
-      await disableCurrentPush();
+      await disableCurrentPush(deviceInfo);
       const next = await inspectPushState();
       setPushState({ ...next, message: "Notifications disabled for this browser.", error: null });
+      if (currentUser) await refreshSubscriptions(currentUser.id);
     } catch (err) {
       setPushState((current) => ({ ...current, error: err instanceof Error ? err.message : "Could not disable notifications.", message: null }));
     } finally {
@@ -148,18 +173,31 @@ export function App() {
     }
   }
 
-  async function sendTestNotification() {
+  async function sendTestNotification(target: "current-device" | "all-user-devices") {
     if (!currentUser) return;
     setTestPushBusy(true);
     setTestPushResult(null);
     setTestPushError(null);
 
     try {
-      setTestPushResult(await sendTestPushNotification(currentUser.id));
+      setTestPushResult(await sendTestPushNotification({ userId: currentUser.id, target, deviceId: deviceInfo.id }));
+      await refreshSubscriptions(currentUser.id);
     } catch (err) {
       setTestPushError(err instanceof Error ? err.message : "Could not send test notification.");
     } finally {
       setTestPushBusy(false);
+    }
+  }
+
+  async function showLocalNotification() {
+    setLocalNotificationMessage(null);
+    setLocalNotificationError(null);
+
+    try {
+      await showLocalTestNotification();
+      setLocalNotificationMessage("Local notification requested for this device.");
+    } catch (err) {
+      setLocalNotificationError(err instanceof Error ? err.message : "Could not show local notification.");
     }
   }
 
@@ -204,7 +242,7 @@ export function App() {
         <main className="content">
           {loadError ? <div className="notice error">{loadError}</div> : null}
           {refreshing && data ? <div className="notice info">Refreshing data...</div> : null}
-          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData, health, healthError, accessGrantedAt, lockApp, pushState, pushBusy, enableNotifications, disableNotifications, testPushBusy, testPushResult, testPushError, sendTestNotification) : <LoadingState />}
+          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData, health, healthError, accessGrantedAt, lockApp, pushState, pushBusy, enableNotifications, disableNotifications, deviceInfo, subscriptions, subscriptionsError, testPushBusy, testPushResult, testPushError, sendTestNotification, localNotificationMessage, localNotificationError, showLocalNotification) : <LoadingState />}
         </main>
         <nav className="mobile-nav" aria-label="Mobile primary">
           {nav.map((item) => {
@@ -236,10 +274,16 @@ function renderRoute(
   pushBusy: boolean,
   enableNotifications: () => Promise<void>,
   disableNotifications: () => Promise<void>,
+  deviceInfo: ClientDeviceInfo,
+  subscriptions: PushSubscriptionInfo[],
+  subscriptionsError: string | null,
   testPushBusy: boolean,
   testPushResult: TestPushSummary | null,
   testPushError: string | null,
-  sendTestNotification: () => Promise<void>
+  sendTestNotification: (target: "current-device" | "all-user-devices") => Promise<void>,
+  localNotificationMessage: string | null,
+  localNotificationError: string | null,
+  showLocalNotification: () => Promise<void>
 ) {
   switch (route) {
     case "dashboard":
@@ -288,10 +332,16 @@ function renderRoute(
           pushBusy={pushBusy}
           onEnableNotifications={enableNotifications}
           onDisableNotifications={disableNotifications}
+          deviceInfo={deviceInfo}
+          subscriptions={subscriptions}
+          subscriptionsError={subscriptionsError}
           testPushBusy={testPushBusy}
           testPushResult={testPushResult}
           testPushError={testPushError}
           onSendTestNotification={sendTestNotification}
+          localNotificationMessage={localNotificationMessage}
+          localNotificationError={localNotificationError}
+          onShowLocalNotification={showLocalNotification}
         />
       );
     case "my-dashboard":

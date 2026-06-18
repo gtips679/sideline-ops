@@ -1,14 +1,9 @@
 self.addEventListener("push", (event) => {
-  let payload = {};
+  event.waitUntil(handlePush(event));
+});
 
-  if (event.data) {
-    try {
-      payload = event.data.json();
-    } catch {
-      payload = { body: event.data.text() };
-    }
-  }
-
+async function handlePush(event) {
+  const payload = parsePushPayload(event);
   const title = payload.title || "Sideline Ops";
   const targetUrl = payload.url || "/";
   const options = {
@@ -20,8 +15,22 @@ self.addEventListener("push", (event) => {
     },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
-});
+  await self.registration.showNotification(title, options);
+}
+
+function parsePushPayload(event) {
+  if (!event.data) return {};
+
+  try {
+    return event.data.json();
+  } catch {
+    try {
+      return { body: event.data.text() };
+    } catch {
+      return {};
+    }
+  }
+}
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
