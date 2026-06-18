@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { PlaceholderPanel } from "../components/PlaceholderPanel";
 import { SectionHeader } from "../components/SectionHeader";
-import { getApiHealth, getBootstrap } from "../lib/api";
+import { getApiHealth, getBootstrap, sendTestPushNotification } from "../lib/api";
 import { disableCurrentPush, enablePushForUser, initialPushUiState, inspectPushState, type PushUiState } from "../lib/push";
-import type { ApiHealth, AvailabilityRequest, BootstrapData, PersonaKey, User } from "../lib/types";
+import type { ApiHealth, AvailabilityRequest, BootstrapData, PersonaKey, TestPushSummary, User } from "../lib/types";
 import { AvailabilityScreen } from "../features/availability/AvailabilityScreen";
 import { StaffRequestsScreen } from "../features/availability/StaffRequestsScreen";
 import { ChecklistsPlaceholder } from "../features/checklists/ChecklistsPlaceholder";
@@ -25,7 +25,7 @@ const personaUserIds: Record<PersonaKey, string> = {
   staff: "user_ava",
 };
 
-const appVersion = "1.0.0-dev";
+const appVersion = "1.1.0-dev";
 
 export function App() {
   const [data, setData] = useState<BootstrapData | null>(null);
@@ -34,6 +34,9 @@ export function App() {
   const [healthError, setHealthError] = useState<string | null>(null);
   const [pushState, setPushState] = useState<PushUiState>(initialPushUiState);
   const [pushBusy, setPushBusy] = useState(false);
+  const [testPushBusy, setTestPushBusy] = useState(false);
+  const [testPushResult, setTestPushResult] = useState<TestPushSummary | null>(null);
+  const [testPushError, setTestPushError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [accessGranted, setAccessGranted] = useState(() => getStoredAccess().granted);
   const [accessGrantedAt, setAccessGrantedAt] = useState<string | null>(() => getStoredAccess().grantedAt);
@@ -115,6 +118,8 @@ export function App() {
   async function enableNotifications() {
     if (!currentUser) return;
     setPushBusy(true);
+    setTestPushResult(null);
+    setTestPushError(null);
     setPushState((current) => ({ ...current, message: null, error: null }));
     try {
       await enablePushForUser(currentUser.id, pushState.pushConfig);
@@ -129,6 +134,8 @@ export function App() {
 
   async function disableNotifications() {
     setPushBusy(true);
+    setTestPushResult(null);
+    setTestPushError(null);
     setPushState((current) => ({ ...current, message: null, error: null }));
     try {
       await disableCurrentPush();
@@ -138,6 +145,21 @@ export function App() {
       setPushState((current) => ({ ...current, error: err instanceof Error ? err.message : "Could not disable notifications.", message: null }));
     } finally {
       setPushBusy(false);
+    }
+  }
+
+  async function sendTestNotification() {
+    if (!currentUser) return;
+    setTestPushBusy(true);
+    setTestPushResult(null);
+    setTestPushError(null);
+
+    try {
+      setTestPushResult(await sendTestPushNotification(currentUser.id));
+    } catch (err) {
+      setTestPushError(err instanceof Error ? err.message : "Could not send test notification.");
+    } finally {
+      setTestPushBusy(false);
     }
   }
 
@@ -182,7 +204,7 @@ export function App() {
         <main className="content">
           {loadError ? <div className="notice error">{loadError}</div> : null}
           {refreshing && data ? <div className="notice info">Refreshing data...</div> : null}
-          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData, health, healthError, accessGrantedAt, lockApp, pushState, pushBusy, enableNotifications, disableNotifications) : <LoadingState />}
+          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData, health, healthError, accessGrantedAt, lockApp, pushState, pushBusy, enableNotifications, disableNotifications, testPushBusy, testPushResult, testPushError, sendTestNotification) : <LoadingState />}
         </main>
         <nav className="mobile-nav" aria-label="Mobile primary">
           {nav.map((item) => {
@@ -213,7 +235,11 @@ function renderRoute(
   pushState: PushUiState,
   pushBusy: boolean,
   enableNotifications: () => Promise<void>,
-  disableNotifications: () => Promise<void>
+  disableNotifications: () => Promise<void>,
+  testPushBusy: boolean,
+  testPushResult: TestPushSummary | null,
+  testPushError: string | null,
+  sendTestNotification: () => Promise<void>
 ) {
   switch (route) {
     case "dashboard":
@@ -262,6 +288,10 @@ function renderRoute(
           pushBusy={pushBusy}
           onEnableNotifications={enableNotifications}
           onDisableNotifications={disableNotifications}
+          testPushBusy={testPushBusy}
+          testPushResult={testPushResult}
+          testPushError={testPushError}
+          onSendTestNotification={sendTestNotification}
         />
       );
     case "my-dashboard":

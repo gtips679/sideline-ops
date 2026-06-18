@@ -108,6 +108,23 @@ export type ApiHealth = {
 export type NotificationConfig = {
   pushEnabled: boolean;
   vapidPublicKey: string;
+  testPushEnabled?: boolean;
+};
+
+export type TestPushResult = {
+  id: string;
+  endpoint: string;
+  ok: boolean;
+  status: number | null;
+  error?: string;
+};
+
+export type TestPushSummary = {
+  ok: boolean;
+  attempted: number;
+  sent: number;
+  failed: number;
+  results: TestPushResult[];
 };
 
 export type ApiError = {

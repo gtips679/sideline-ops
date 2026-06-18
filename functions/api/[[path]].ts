@@ -2,10 +2,26 @@ export type Env = {
   SIDELINE_DB: D1Database;
   SIDELINE_ACCESS_CODE?: string;
   VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
 };
 
 type ApiContext = EventContext<Env, string, unknown>;
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+type DbPushSubscription = {
+  id: string;
+  user_id: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+};
+type TestPushResult = {
+  id: string;
+  endpoint: string;
+  ok: boolean;
+  status: number | null;
+  error?: string;
+};
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -58,6 +74,7 @@ async function route(context: ApiContext, method: string, path: string): Promise
   if (method === "POST" && path === "availability-responses") return upsertAvailabilityResponse(context);
   if (method === "POST" && path === "notifications/subscribe") return subscribeToNotifications(context);
   if (method === "POST" && path === "notifications/unsubscribe") return unsubscribeFromNotifications(context);
+  if (method === "POST" && path === "notifications/test-send") return sendTestNotification(context);
   if (method === "GET" && path === "activity") return listActivity(context.env.SIDELINE_DB);
 
   return json({ error: `No route for ${method} /api/${path}` }, 404);
@@ -68,6 +85,7 @@ function getNotificationConfig(context: ApiContext): Response {
   return json({
     pushEnabled: vapidPublicKey.length > 0,
     vapidPublicKey,
+    testPushEnabled: Boolean(vapidPublicKey && context.env.VAPID_PRIVATE_KEY && context.env.VAPID_SUBJECT),
   });
 }
 
@@ -128,6 +146,186 @@ async function unsubscribeFromNotifications(context: ApiContext): Promise<Respon
     .run();
 
   return json({ ok: true });
+}
+
+async function sendTestNotification(context: ApiContext): Promise<Response> {
+  const body = await readBody(context.request);
+  const userId = requireString(body.userId, "userId");
+  const vapidPublicKey = context.env.VAPID_PUBLIC_KEY || "";
+  const vapidPrivateKey = context.env.VAPID_PRIVATE_KEY || "";
+  const vapidSubject = context.env.VAPID_SUBJECT || "";
+
+  if (!vapidPublicKey || !vapidPrivateKey || !vapidSubject) {
+    return json(
+      {
+        ok: false,
+        error: "Missing VAPID server configuration. Set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT, then redeploy.",
+      },
+      400
+    );
+  }
+
+  const subscriptions = await context.env.SIDELINE_DB.prepare(
+    `SELECT id, user_id, endpoint, p256dh, auth
+     FROM notification_subscriptions
+     WHERE user_id = ? AND is_active = 1
+     ORDER BY updated_at DESC`
+  )
+    .bind(userId)
+    .all<DbPushSubscription>();
+
+  const payload = {
+    title: "Sideline Ops",
+    body: "Test notification from Sideline Ops.",
+    url: "/",
+  };
+  const results: TestPushResult[] = [];
+
+  for (const subscription of subscriptions.results) {
+    try {
+      const response = await sendWebPush(subscription, payload, {
+        publicKey: vapidPublicKey,
+        privateKey: vapidPrivateKey,
+        subject: vapidSubject,
+      });
+      const ok = response.ok || response.status === 201;
+      const result: TestPushResult = {
+        id: subscription.id,
+        endpoint: subscription.endpoint,
+        ok,
+        status: response.status,
+      };
+
+      if (!ok) {
+        result.error = await response.text().catch(() => response.statusText);
+      }
+
+      if (response.status === 404 || response.status === 410) {
+        await markNotificationSubscriptionInactive(context.env.SIDELINE_DB, subscription.id);
+      }
+
+      results.push(result);
+    } catch (err) {
+      results.push({
+        id: subscription.id,
+        endpoint: subscription.endpoint,
+        ok: false,
+        status: null,
+        error: err instanceof Error ? err.message : "Push send failed.",
+      });
+    }
+  }
+
+  const sent = results.filter((result) => result.ok).length;
+  const failed = results.length - sent;
+  return json({
+    ok: true,
+    attempted: subscriptions.results.length,
+    sent,
+    failed,
+    results,
+  });
+}
+
+async function markNotificationSubscriptionInactive(db: D1Database, id: string) {
+  await db.prepare("UPDATE notification_subscriptions SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(id).run();
+}
+
+async function sendWebPush(
+  subscription: DbPushSubscription,
+  payload: JsonValue,
+  vapid: { publicKey: string; privateKey: string; subject: string }
+): Promise<Response> {
+  const endpoint = new URL(subscription.endpoint);
+  const encrypted = await encryptWebPushPayload(JSON.stringify(payload), subscription.p256dh, subscription.auth);
+  const authorization = await createVapidAuthorizationHeader(endpoint.origin, vapid);
+
+  return fetch(subscription.endpoint, {
+    method: "POST",
+    headers: {
+      authorization,
+      "content-encoding": "aes128gcm",
+      "content-type": "application/octet-stream",
+      ttl: "60",
+    },
+    body: encrypted,
+  });
+}
+
+async function createVapidAuthorizationHeader(
+  audience: string,
+  vapid: { publicKey: string; privateKey: string; subject: string }
+): Promise<string> {
+  const publicKey = base64UrlToBytes(vapid.publicKey);
+  if (publicKey.length !== 65 || publicKey[0] !== 4) {
+    throw new Error("Invalid VAPID_PUBLIC_KEY.");
+  }
+
+  const privateKey = base64UrlToBytes(vapid.privateKey);
+  if (privateKey.length !== 32) {
+    throw new Error("Invalid VAPID_PRIVATE_KEY.");
+  }
+
+  const key = await crypto.subtle.importKey(
+    "jwk",
+    {
+      kty: "EC",
+      crv: "P-256",
+      x: bytesToBase64Url(publicKey.slice(1, 33)),
+      y: bytesToBase64Url(publicKey.slice(33, 65)),
+      d: bytesToBase64Url(privateKey),
+      ext: false,
+    },
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"]
+  );
+  const header = bytesToBase64Url(utf8(JSON.stringify({ typ: "JWT", alg: "ES256" })));
+  const claims = bytesToBase64Url(
+    utf8(
+      JSON.stringify({
+        aud: audience,
+        exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60,
+        sub: vapid.subject,
+      })
+    )
+  );
+  const signingInput = `${header}.${claims}`;
+  const signature = new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, utf8(signingInput)));
+  return `vapid t=${signingInput}.${bytesToBase64Url(signature)}, k=${vapid.publicKey}`;
+}
+
+async function encryptWebPushPayload(payload: string, userPublicKeyBase64: string, authSecretBase64: string): Promise<Uint8Array> {
+  const userPublicKey = base64UrlToBytes(userPublicKeyBase64);
+  const authSecret = base64UrlToBytes(authSecretBase64);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const serverKeyPair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]) as CryptoKeyPair;
+  const serverPublicKey = new Uint8Array(await crypto.subtle.exportKey("raw", serverKeyPair.publicKey) as ArrayBuffer);
+  const importedUserPublicKey = await crypto.subtle.importKey("raw", userPublicKey, { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const sharedSecret = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: importedUserPublicKey } as never, serverKeyPair.privateKey, 256));
+  const prk = await hmac(authSecret, sharedSecret);
+  const keyInfo = concatBytes(utf8("WebPush: info"), new Uint8Array([0]), userPublicKey, serverPublicKey);
+  const ikm = await hmac(prk, keyInfo);
+  const contentEncryptionKey = await hkdf(salt, ikm, utf8("Content-Encoding: aes128gcm\0"), 16);
+  const nonce = await hkdf(salt, ikm, utf8("Content-Encoding: nonce\0"), 12);
+  const plaintext = concatBytes(utf8(payload), new Uint8Array([2]));
+  const key = await crypto.subtle.importKey("raw", contentEncryptionKey, "AES-GCM", false, ["encrypt"]);
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce, tagLength: 128 }, key, plaintext));
+  const recordSize = new Uint8Array(4);
+  new DataView(recordSize.buffer).setUint32(0, 4096);
+
+  return concatBytes(salt, recordSize, new Uint8Array([serverPublicKey.length]), serverPublicKey, ciphertext);
+}
+
+async function hkdf(salt: Uint8Array, ikm: Uint8Array, info: Uint8Array, length: number): Promise<Uint8Array> {
+  const prk = await hmac(salt, ikm);
+  const expanded = await hmac(prk, concatBytes(info, new Uint8Array([1])));
+  return expanded.slice(0, length);
+}
+
+async function hmac(keyBytes: Uint8Array, data: Uint8Array): Promise<Uint8Array> {
+  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, data));
 }
 
 function getHealth(): Response {
@@ -464,6 +662,46 @@ function objectValue(value: JsonValue | undefined): Record<string, JsonValue | u
 function boolToInt(value: JsonValue | undefined, defaultValue: boolean): number {
   if (typeof value === "boolean") return value ? 1 : 0;
   return defaultValue ? 1 : 0;
+}
+
+function utf8(value: string): Uint8Array {
+  return new TextEncoder().encode(value);
+}
+
+function concatBytes(...arrays: Uint8Array[]): Uint8Array {
+  const totalLength = arrays.reduce((sum, array) => sum + array.length, 0);
+  const output = new Uint8Array(totalLength);
+  let offset = 0;
+
+  for (const array of arrays) {
+    output.set(array, offset);
+    offset += array.length;
+  }
+
+  return output;
+}
+
+function base64UrlToBytes(value: string): Uint8Array {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(base64.length + (4 - base64.length % 4) % 4, "=");
+  const raw = atob(padded);
+  const output = new Uint8Array(raw.length);
+
+  for (let index = 0; index < raw.length; index += 1) {
+    output[index] = raw.charCodeAt(index);
+  }
+
+  return output;
+}
+
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let raw = "";
+
+  for (const byte of bytes) {
+    raw += String.fromCharCode(byte);
+  }
+
+  return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 async function resolveRecipientUserIds(db: D1Database, body: Record<string, JsonValue | undefined>): Promise<string[]> {

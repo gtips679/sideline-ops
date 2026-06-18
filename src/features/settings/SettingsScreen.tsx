@@ -3,7 +3,7 @@ import { SectionHeader } from "../../components/SectionHeader";
 import { StatusPill } from "../../components/StatusPill";
 import { formatDateTime } from "../../lib/format";
 import type { PushUiState } from "../../lib/push";
-import type { ApiHealth, BootstrapData, User } from "../../lib/types";
+import type { ApiHealth, BootstrapData, TestPushSummary, User } from "../../lib/types";
 
 type SettingsScreenProps = {
   appVersion: string;
@@ -19,6 +19,10 @@ type SettingsScreenProps = {
   pushBusy: boolean;
   onEnableNotifications: () => Promise<void>;
   onDisableNotifications: () => Promise<void>;
+  testPushBusy: boolean;
+  testPushResult: TestPushSummary | null;
+  testPushError: string | null;
+  onSendTestNotification: () => Promise<void>;
 };
 
 const futureItems = ["Push notifications", "Auth", "Integrations", "SMS fallback"];
@@ -37,10 +41,15 @@ export function SettingsScreen({
   pushBusy,
   onEnableNotifications,
   onDisableNotifications,
+  testPushBusy,
+  testPushResult,
+  testPushError,
+  onSendTestNotification,
 }: SettingsScreenProps) {
   const pushUnavailableReason = getPushUnavailableReason(pushState);
   const canEnablePush = !pushBusy && !pushUnavailableReason && pushState.subscriptionStatus !== "subscribed";
   const canDisablePush = !pushBusy && pushState.subscriptionStatus === "subscribed";
+  const canSendTestPush = !testPushBusy && pushState.subscriptionStatus === "subscribed";
 
   return (
     <>
@@ -77,7 +86,7 @@ export function SettingsScreen({
             <StatusRow label="Push subscription" value={pushState.subscriptionStatus} tone={statusTone(pushState.subscriptionStatus)} />
             <StatusRow label="Push config" value={pushState.pushConfigStatus === "available" ? "Available" : pushState.pushConfigStatus === "missing" ? "Push config missing" : pushState.pushConfigStatus} tone={statusTone(pushState.pushConfigStatus)} />
           </div>
-          <p className="muted">Milestone 1.0 captures browser subscriptions only. Sideline Ops does not send operational push alerts yet.</p>
+          <p className="muted">Milestone 1.1 can send a manual test notification to the current persona. Operational push alerts are still out of scope.</p>
           {pushUnavailableReason ? <div className="notice info">{pushUnavailableReason}</div> : null}
           {pushState.message ? <div className="notice success">{pushState.message}</div> : null}
           {pushState.error ? <div className="notice error">{pushState.error}</div> : null}
@@ -89,6 +98,26 @@ export function SettingsScreen({
               Disable notifications
             </button>
           </div>
+          <div className="test-push-box">
+            <strong>Manual test push</strong>
+            {pushState.subscriptionStatus === "subscribed" ? (
+              <span>Send a test notification to active subscriptions for {currentUser.display_name}.</span>
+            ) : (
+              <span>Subscribe first.</span>
+            )}
+            {pushState.pushConfig?.testPushEnabled === false ? (
+              <span className="muted">Server sending also requires VAPID_PRIVATE_KEY and VAPID_SUBJECT.</span>
+            ) : null}
+            <button className="secondary-button" disabled={!canSendTestPush} onClick={onSendTestNotification} type="button">
+              {testPushBusy ? "Sending" : "Send test notification to this device/user"}
+            </button>
+          </div>
+          {testPushResult ? (
+            <div className={testPushResult.failed > 0 ? "notice info" : "notice success"}>
+              Test push attempted {testPushResult.attempted}, sent {testPushResult.sent}, failed {testPushResult.failed}.
+            </div>
+          ) : null}
+          {testPushError ? <div className="notice error">{testPushError}</div> : null}
         </section>
 
         <section className="panel">

@@ -363,6 +363,14 @@ th {
   gap: 10px;
 }
 
+.test-push-box {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #dfe5dd;
+}
+
 .choice-button {
   min-width: 96px;
   min-height: 42px;

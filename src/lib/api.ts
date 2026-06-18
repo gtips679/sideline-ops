@@ -1,5 +1,5 @@
 import { demoData } from "./demoData";
-import type { ApiHealth, AvailabilityRequest, AvailabilityResponseValue, BootstrapData, Event, Location, NotificationConfig, User } from "./types";
+import type { ApiHealth, AvailabilityRequest, AvailabilityResponseValue, BootstrapData, Event, Location, NotificationConfig, TestPushSummary, User } from "./types";
 
 export async function getApiHealth(): Promise<ApiHealth> {
   const response = await fetch("/api/health");
@@ -27,6 +27,10 @@ export async function savePushSubscription(input: {
 
 export async function disablePushSubscription(endpoint: string): Promise<void> {
   await postJson<{ ok: true }>("/api/notifications/unsubscribe", { endpoint });
+}
+
+export async function sendTestPushNotification(userId: string): Promise<TestPushSummary> {
+  return postJson<TestPushSummary>("/api/notifications/test-send", { userId });
 }
 
 export async function verifyAccessCode(code: string): Promise<void> {
