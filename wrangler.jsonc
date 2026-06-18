@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sideline-ops",
+  "compatibility_date": "2026-06-17",
+  "pages_build_output_dir": "dist",
+  "d1_databases": [
+    {
+      "binding": "SIDELINE_DB",
+      "database_name": "sideline-ops",
+      "database_id": "replace-with-cloudflare-d1-database-id",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

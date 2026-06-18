@@ -1,0 +1,9 @@
+{
+  "name": "Sideline Ops",
+  "short_name": "Sideline Ops",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8f5",
+  "theme_color": "#1f6f5b",
+  "icons": []
+}
