@@ -19,7 +19,13 @@ async function handlePush(event) {
 }
 
 function parsePushPayload(event) {
-  if (!event.data) return {};
+  if (!event.data) {
+    return {
+      title: "Sideline Ops",
+      body: "Empty push received by Sideline Ops.",
+      url: "/",
+    };
+  }
 
   try {
     return event.data.json();

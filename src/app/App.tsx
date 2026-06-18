@@ -26,7 +26,7 @@ const personaUserIds: Record<PersonaKey, string> = {
   staff: "user_ava",
 };
 
-const appVersion = "1.1.1-dev";
+const appVersion = "1.1.2-dev";
 
 export function App() {
   const [data, setData] = useState<BootstrapData | null>(null);
@@ -173,14 +173,14 @@ export function App() {
     }
   }
 
-  async function sendTestNotification(target: "current-device" | "all-user-devices") {
+  async function sendTestNotification(target: "current-device" | "all-user-devices", mode: "empty" | "payload") {
     if (!currentUser) return;
     setTestPushBusy(true);
     setTestPushResult(null);
     setTestPushError(null);
 
     try {
-      setTestPushResult(await sendTestPushNotification({ userId: currentUser.id, target, deviceId: deviceInfo.id }));
+      setTestPushResult(await sendTestPushNotification({ userId: currentUser.id, target, deviceId: deviceInfo.id, mode }));
       await refreshSubscriptions(currentUser.id);
     } catch (err) {
       setTestPushError(err instanceof Error ? err.message : "Could not send test notification.");
@@ -280,7 +280,7 @@ function renderRoute(
   testPushBusy: boolean,
   testPushResult: TestPushSummary | null,
   testPushError: string | null,
-  sendTestNotification: (target: "current-device" | "all-user-devices") => Promise<void>,
+  sendTestNotification: (target: "current-device" | "all-user-devices", mode: "empty" | "payload") => Promise<void>,
   localNotificationMessage: string | null,
   localNotificationError: string | null,
   showLocalNotification: () => Promise<void>

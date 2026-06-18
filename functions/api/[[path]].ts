@@ -27,9 +27,12 @@ type TestPushResult = {
   device_id_short: string | null;
   device_label: string | null;
   endpoint_host: string;
+  audience: string;
+  mode: "empty" | "payload";
   ok: boolean;
   status: number | null;
   marked_inactive: boolean;
+  response_text_excerpt?: string;
   error?: string;
 };
 
@@ -198,6 +201,7 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
   const userId = requireString(body.userId, "userId");
   const target = requireString(body.target, "target");
   const deviceId = requireString(body.deviceId, "deviceId");
+  const modeInput = stringValue(body.mode) || "payload";
   const vapidPublicKey = context.env.VAPID_PUBLIC_KEY || "";
   const vapidPrivateKey = context.env.VAPID_PRIVATE_KEY || "";
   const vapidSubject = context.env.VAPID_SUBJECT || "";
@@ -205,6 +209,11 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
   if (!["current-device", "all-user-devices"].includes(target)) {
     throw new Error("Invalid target");
   }
+
+  if (!["empty", "payload"].includes(modeInput)) {
+    throw new Error("Invalid mode");
+  }
+  const mode = modeInput as "empty" | "payload";
 
   if (!vapidPublicKey || !vapidPrivateKey || !vapidSubject) {
     return json(
@@ -247,7 +256,7 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
         publicKey: vapidPublicKey,
         privateKey: vapidPrivateKey,
         subject: vapidSubject,
-      });
+      }, mode);
       const ok = response.ok || response.status === 201;
       const result: TestPushResult = {
         id: subscription.id,
@@ -255,13 +264,17 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
         device_id_short: subscription.device_id ? shortenId(subscription.device_id) : null,
         device_label: subscription.device_label,
         endpoint_host: endpointHost(subscription.endpoint),
+        audience: endpointAudience(subscription.endpoint),
+        mode,
         ok,
         status: response.status,
         marked_inactive: false,
       };
 
       if (!ok) {
-        result.error = await response.text().catch(() => response.statusText);
+        const responseText = await response.text().catch(() => response.statusText);
+        result.response_text_excerpt = safeExcerpt(responseText);
+        result.error = response.statusText || "Push service returned a non-2xx response.";
       }
 
       if (response.status === 404 || response.status === 410) {
@@ -277,6 +290,8 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
         device_id_short: subscription.device_id ? shortenId(subscription.device_id) : null,
         device_label: subscription.device_label,
         endpoint_host: endpointHost(subscription.endpoint),
+        audience: endpointAudience(subscription.endpoint),
+        mode,
         ok: false,
         status: null,
         marked_inactive: false,
@@ -293,6 +308,7 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
     sent,
     failed,
     target,
+    mode,
     devicesAttempted: new Set(subscriptions.results.map((subscription) => subscription.device_id).filter(Boolean)).size,
     results,
   });
@@ -338,26 +354,52 @@ function endpointHost(endpoint: string): string {
   }
 }
 
+function endpointAudience(endpoint: string): string {
+  try {
+    return new URL(endpoint).origin;
+  } catch {
+    return "invalid-endpoint";
+  }
+}
+
 function shortenId(id: string): string {
   return id.length <= 8 ? id : id.slice(0, 8);
+}
+
+function safeExcerpt(value: string): string {
+  return value.length > 240 ? `${value.slice(0, 240)}...` : value;
 }
 
 async function sendWebPush(
   subscription: DbPushSubscription,
   payload: JsonValue,
-  vapid: { publicKey: string; privateKey: string; subject: string }
+  vapid: { publicKey: string; privateKey: string; subject: string },
+  mode: "empty" | "payload"
 ): Promise<Response> {
   const endpoint = new URL(subscription.endpoint);
-  const encrypted = await encryptWebPushPayload(JSON.stringify(payload), subscription.p256dh, subscription.auth);
   const authorization = await createVapidAuthorizationHeader(endpoint.origin, vapid);
+  const headers: Record<string, string> = {
+    authorization,
+    "crypto-key": `p256ecdsa=${vapid.publicKey}`,
+    ttl: "60",
+    urgency: "normal",
+  };
+
+  if (mode === "empty") {
+    return fetch(subscription.endpoint, {
+      method: "POST",
+      headers,
+    });
+  }
+
+  const encrypted = await encryptWebPushPayload(JSON.stringify(payload), subscription.p256dh, subscription.auth);
 
   return fetch(subscription.endpoint, {
     method: "POST",
     headers: {
-      authorization,
+      ...headers,
       "content-encoding": "aes128gcm",
       "content-type": "application/octet-stream",
-      ttl: "60",
     },
     body: encrypted,
   });

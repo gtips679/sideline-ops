@@ -26,7 +26,7 @@ type SettingsScreenProps = {
   testPushBusy: boolean;
   testPushResult: TestPushSummary | null;
   testPushError: string | null;
-  onSendTestNotification: (target: "current-device" | "all-user-devices") => Promise<void>;
+  onSendTestNotification: (target: "current-device" | "all-user-devices", mode: "empty" | "payload") => Promise<void>;
   localNotificationMessage: string | null;
   localNotificationError: string | null;
   onShowLocalNotification: () => Promise<void>;
@@ -156,17 +156,33 @@ export function SettingsScreen({
 
         <section className="panel push-diagnostics-panel">
           <h2>Test push</h2>
-          <p className="muted">Send a manual server push to the current device only or every active device for the selected persona. Operational alerts are still out of scope.</p>
+          <p className="muted">Empty push tests VAPID and delivery without a body. Payload push tests the full encrypted notification path.</p>
           {pushState.pushConfig?.testPushEnabled === false ? (
             <div className="notice info">Server sending also requires VAPID_PRIVATE_KEY and VAPID_SUBJECT.</div>
           ) : null}
           {currentDeviceSubscriptions.length === 0 ? <div className="notice info">Subscribe this device before sending a current-device test.</div> : null}
+          <div className="test-mode-grid">
+            <article>
+              <strong>Empty push</strong>
+              <span>Delivery diagnostic. The service worker shows its fallback notification when no payload arrives.</span>
+            </article>
+            <article>
+              <strong>Payload push</strong>
+              <span>Encrypted payload diagnostic using the Sideline Ops JSON test message.</span>
+            </article>
+          </div>
           <div className="button-row">
-            <button className="secondary-button" disabled={!canSendCurrentDevicePush} onClick={() => onSendTestNotification("current-device")} type="button">
-              {testPushBusy ? "Sending" : "Send test push to current device only"}
+            <button className="secondary-button" disabled={!canSendCurrentDevicePush} onClick={() => onSendTestNotification("current-device", "empty")} type="button">
+              {testPushBusy ? "Sending" : "Send empty push to this device"}
             </button>
-            <button className="secondary-button" disabled={!canSendAllDevicePush} onClick={() => onSendTestNotification("all-user-devices")} type="button">
-              {testPushBusy ? "Sending" : "Send test push to all devices for this user"}
+            <button className="secondary-button" disabled={!canSendCurrentDevicePush} onClick={() => onSendTestNotification("current-device", "payload")} type="button">
+              {testPushBusy ? "Sending" : "Send payload push to this device"}
+            </button>
+            <button className="secondary-button" disabled={!canSendAllDevicePush} onClick={() => onSendTestNotification("all-user-devices", "empty")} type="button">
+              {testPushBusy ? "Sending" : "Send empty push to all devices for selected persona"}
+            </button>
+            <button className="secondary-button" disabled={!canSendAllDevicePush} onClick={() => onSendTestNotification("all-user-devices", "payload")} type="button">
+              {testPushBusy ? "Sending" : "Send payload push to all devices for selected persona"}
             </button>
           </div>
           {testPushResult ? <TestPushResultSummary result={testPushResult} /> : null}
@@ -226,14 +242,15 @@ export function SettingsScreen({
 function TestPushResultSummary({ result }: { result: TestPushSummary }) {
   return (
     <div className={result.failed > 0 ? "notice info" : "notice success"}>
-      <strong>Test push {result.target ?? "manual"}:</strong> attempted {result.attempted}, sent {result.sent}, failed {result.failed}, devices attempted {result.devicesAttempted ?? 0}.
+      <strong>Test push {result.mode ?? "payload"} / {result.target ?? "manual"}:</strong> attempted {result.attempted}, sent {result.sent}, failed {result.failed}, devices attempted {result.devicesAttempted ?? 0}.
       {result.results.length > 0 ? (
         <div className="test-result-list">
           {result.results.map((item) => (
             <span key={item.id}>
-              {item.device_label ?? "Unknown device"} ({item.device_id_short ?? "no id"}, {item.endpoint_host}) - {item.ok ? "sent" : "failed"}
+              {item.device_label ?? "Unknown device"} ({item.device_id_short ?? "no id"}, {item.endpoint_host}, aud {item.audience ?? "unknown"}, {item.mode ?? "payload"}) - {item.ok ? "sent" : "failed"}
               {item.status ? ` ${item.status}` : ""}
               {item.marked_inactive ? " marked inactive" : ""}
+              {item.response_text_excerpt ? ` - ${item.response_text_excerpt}` : ""}
             </span>
           ))}
         </div>

@@ -382,12 +382,14 @@ th {
 
 .device-list,
 .test-result-list,
-.troubleshooting-list {
+.troubleshooting-list,
+.test-mode-grid {
   display: grid;
   gap: 8px;
 }
 
-.device-list article {
+.device-list article,
+.test-mode-grid article {
   display: grid;
   gap: 8px;
   padding: 10px;
@@ -411,7 +413,8 @@ th {
 .device-list span,
 .device-meta span,
 .test-result-list span,
-.troubleshooting-list p {
+.troubleshooting-list p,
+.test-mode-grid span {
   color: #647069;
   font-size: 0.88rem;
 }

@@ -117,9 +117,12 @@ export type TestPushResult = {
   device_id_short?: string | null;
   device_label?: string | null;
   endpoint_host?: string;
+  audience?: string;
+  mode?: "empty" | "payload";
   ok: boolean;
   status: number | null;
   marked_inactive?: boolean;
+  response_text_excerpt?: string;
   error?: string;
 };
 
@@ -129,6 +132,7 @@ export type TestPushSummary = {
   sent: number;
   failed: number;
   target?: "current-device" | "all-user-devices";
+  mode?: "empty" | "payload";
   devicesAttempted?: number;
   results: TestPushResult[];
 };
