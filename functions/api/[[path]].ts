@@ -1,5 +1,6 @@
 export type Env = {
   SIDELINE_DB: D1Database;
+  SIDELINE_ACCESS_CODE?: string;
 };
 
 type ApiContext = EventContext<Env, string, unknown>;
@@ -36,6 +37,8 @@ export async function handleApiPath(context: ApiContext, method: string, path: s
 }
 
 async function route(context: ApiContext, method: string, path: string): Promise<Response> {
+  if (method === "POST" && path === "access/verify") return verifyAccess(context);
+
   if (!context.env.SIDELINE_DB) {
     return json({ error: "SIDELINE_DB binding is not configured" }, 500);
   }
@@ -54,6 +57,18 @@ async function route(context: ApiContext, method: string, path: string): Promise
   if (method === "GET" && path === "activity") return listActivity(context.env.SIDELINE_DB);
 
   return json({ error: `No route for ${method} /api/${path}` }, 404);
+}
+
+async function verifyAccess(context: ApiContext): Promise<Response> {
+  const body = await readBody(context.request);
+  const submittedCode = stringValue(body.code);
+  const expectedCode = context.env.SIDELINE_ACCESS_CODE || "sideline-dev";
+
+  if (submittedCode && submittedCode === expectedCode) {
+    return json({ ok: true });
+  }
+
+  return json({ ok: false, error: "Invalid access code" }, 401);
 }
 
 function getHealth(): Response {

@@ -7,6 +7,19 @@ export async function getApiHealth(): Promise<ApiHealth> {
   return (await response.json()) as ApiHealth;
 }
 
+export async function verifyAccessCode(code: string): Promise<void> {
+  const response = await fetch("/api/access/verify", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+
+  if (response.ok) return;
+
+  const payload = await response.json().catch(() => null);
+  throw new Error(payload && typeof payload.error === "string" ? payload.error : "Invalid access code");
+}
+
 export async function getBootstrap(): Promise<BootstrapData> {
   try {
     const response = await fetch("/api/bootstrap");

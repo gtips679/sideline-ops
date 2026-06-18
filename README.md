@@ -1,6 +1,6 @@
 # Sideline Ops
 
-Milestone 0.4 deployable preview for Sideline Supplies, a PWA-style concessions and staffing operations app.
+Milestone 0.5 preview-gated deployable app for Sideline Supplies, a PWA-style concessions and staffing operations app.
 
 This project includes:
 
@@ -12,6 +12,7 @@ This project includes:
 - Targeted availability requests with recipient-aware response counts
 - Basic PWA manifest/icons
 - Settings/status screen for API, bootstrap, persona, app version, and environment
+- Temporary preview access gate before the demo persona switcher
 
 ## Project Structure
 
@@ -44,6 +45,12 @@ Run the frontend-only Vite app. This mode is useful for UI work and falls back t
 
 ```bash
 npm run dev
+```
+
+Local default preview access code:
+
+```txt
+sideline-dev
 ```
 
 Apply local D1 migrations:
@@ -93,6 +100,7 @@ This only affects local `.wrangler` state. Do not run destructive reset commands
 
 ## API Routes
 
+- `POST /api/access/verify`
 - `GET /api/health`
 - `GET /api/bootstrap`
 - `GET /api/users`
@@ -117,7 +125,11 @@ Current structure is intended for Cloudflare Pages + Pages Functions + D1:
 - Required D1 binding: `SIDELINE_DB`
 - D1 database name: `sideline-ops`
 
-No secrets are required for Milestone 0.4.
+Milestone 0.5 uses one Pages environment variable:
+
+```txt
+SIDELINE_ACCESS_CODE
+```
 
 ## Cloudflare Deployment Checklist
 
@@ -163,21 +175,50 @@ Functions directory: functions
 SIDELINE_DB -> sideline-ops
 ```
 
-8. Deploy.
+8. Set the preview access code in Cloudflare Pages:
 
-9. Confirm API health after deploy by opening:
+```txt
+Settings -> Environment variables -> Production -> SIDELINE_ACCESS_CODE
+Settings -> Environment variables -> Preview -> SIDELINE_ACCESS_CODE
+```
+
+Do not commit the real access code to the repo.
+
+9. Redeploy after setting or changing environment variables.
+
+10. Confirm API health after deploy by opening:
 
 ```txt
 https://YOUR_DEPLOYED_URL/api/health
 ```
 
-10. Confirm bootstrap/D1 after deploy by opening:
+11. Confirm bootstrap/D1 after deploy by opening:
 
 ```txt
 https://YOUR_DEPLOYED_URL/api/bootstrap
 ```
 
-11. Open the deployed app and check Settings. It should show API health, bootstrap loaded, app version `0.4.0-dev`, and an environment label.
+12. Open the deployed app. The access gate should appear before the main app.
+
+13. Enter the configured preview access code.
+
+14. Check Settings. It should show API health, bootstrap loaded, access granted, app version `0.5.0-dev`, and an environment label.
+
+## Preview Access Gate
+
+The access gate is a temporary preview gate, not real staff authentication.
+
+Behavior:
+
+- First load shows an access-code screen.
+- The client submits the entered code to `POST /api/access/verify`.
+- The Pages Function compares it to `SIDELINE_ACCESS_CODE`.
+- If `SIDELINE_ACCESS_CODE` is missing, the server accepts the local development code `sideline-dev`.
+- The browser stores only `sideline_access_granted=true` and `sideline_access_granted_at`.
+- The entered access code is not stored in localStorage.
+- Settings has a Lock app button that clears preview access and returns to the gate.
+
+For Cloudflare Pages, set `SIDELINE_ACCESS_CODE` separately for both Preview and Production environments, then redeploy.
 
 ## Deployment Smoke Tests
 
@@ -191,34 +232,41 @@ https://YOUR_DEPLOYED_URL/api/bootstrap
 Then test the app UI:
 
 1. Open the deployed URL.
-2. Use `Glenn / Admin`.
-3. Create a test staff member.
-4. Create or choose an event.
-5. Create an availability request targeted to the test staff member and Ava.
-6. Switch the persona to `Staff`.
-7. Open Requests.
-8. Respond Yes, No, or Maybe.
-9. Switch back to `Glenn / Admin`.
-10. Open Availability.
-11. Confirm Yes/No/Maybe/No response counts only include targeted staff.
-12. Open Settings and confirm API status and environment.
+2. Confirm the access gate appears.
+3. Enter a wrong code and confirm it is rejected.
+4. Enter the configured preview access code.
+5. Use `Glenn / Admin`.
+6. Create a test staff member.
+7. Create or choose an event.
+8. Create an availability request targeted to the test staff member and Ava.
+9. Switch the persona to `Staff`.
+10. Open Requests.
+11. Respond Yes, No, or Maybe.
+12. Switch back to `Glenn / Admin`.
+13. Open Availability.
+14. Confirm Yes/No/Maybe/No response counts only include targeted staff.
+15. Open Settings and confirm API status, access status, app version, and environment.
+16. Click Lock app and confirm the access gate returns.
 
 ## Phone Test Checklist
 
 Use the deployed HTTPS URL for phone testing.
 
 1. Open the deployed URL on iPhone Safari.
-2. Use the demo persona switcher.
-3. Tap Share, then Add to Home Screen.
-4. Open Sideline from the Home Screen icon.
-5. Confirm it opens in standalone app display.
-6. Test Staff Requests and the Yes/No/Maybe buttons.
-7. Switch to Glenn/Admin and inspect Dashboard, Staff, Events, Availability, and Settings.
-8. Confirm mobile admin tables display as cards.
-9. Confirm Settings shows API health and app version.
-10. On Android Chrome, open the deployed URL.
-11. Use Install app or Add to Home screen.
-12. Open from the icon and repeat the staff/admin checks.
+2. Confirm the access gate appears.
+3. Enter the preview access code.
+4. Use the demo persona switcher.
+5. Tap Share, then Add to Home Screen.
+6. Open Sideline from the Home Screen icon.
+7. Confirm it opens in standalone app display and stays unlocked.
+8. Test Staff Requests and the Yes/No/Maybe buttons.
+9. Switch to Glenn/Admin and inspect Dashboard, Staff, Events, Availability, and Settings.
+10. Confirm mobile admin tables display as cards.
+11. Confirm Settings shows API health, access status, environment, and app version.
+12. Tap Lock app in Settings and confirm the gate returns.
+13. On Android Chrome, open the deployed URL.
+14. Use Install app or Add to Home screen.
+15. Open from the icon and repeat the access/staff/admin checks.
 
 ## Database Safety
 
@@ -231,6 +279,8 @@ Use the deployed HTTPS URL for phone testing.
 ## Notes
 
 Authentication is intentionally not implemented yet. The persona switcher is temporary scaffolding for UI and workflow testing.
+
+The access gate is also temporary. It prevents casual public access to the deployed preview but does not replace real authentication, authorization, audit controls, or staff login.
 
 Availability requests are targeted through `availability_request_recipients`. Admin response counts and staff request visibility use that table, so "No response" only includes users who were actually targeted.
 

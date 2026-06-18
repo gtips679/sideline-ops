@@ -479,7 +479,18 @@ th {
   font-weight: 800;
 }
 
-.primary-button:disabled {
+.secondary-button {
+  min-height: 40px;
+  border: 1px solid #ccd5cc;
+  border-radius: 7px;
+  padding: 0 16px;
+  color: #1f2723;
+  background: #ffffff;
+  font-weight: 800;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
   cursor: wait;
   opacity: 0.65;
 }
@@ -574,6 +585,61 @@ th {
 
 .future-list span {
   color: #647069;
+}
+
+.access-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #f6f7f2;
+}
+
+.access-panel {
+  width: min(100%, 420px);
+  display: grid;
+  gap: 18px;
+  border: 1px solid #dfe5dd;
+  border-radius: 8px;
+  padding: 24px;
+  background: #ffffff;
+  box-shadow: 0 10px 34px rgba(20, 31, 27, 0.09);
+}
+
+.access-brand span {
+  color: #5d766d;
+}
+
+.access-brand strong {
+  color: #16382f;
+}
+
+.access-panel p {
+  margin: 0;
+  color: #59635c;
+}
+
+.access-form {
+  display: grid;
+  gap: 12px;
+}
+
+.access-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.access-form label span {
+  color: #5a655f;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.access-form input {
+  min-height: 46px;
+  border: 1px solid #ccd5cc;
+  border-radius: 7px;
+  padding: 9px 10px;
 }
 
 .mobile-nav {
@@ -694,6 +760,7 @@ th {
   }
 
   .primary-button,
+  .secondary-button,
   .choice-button {
     min-height: 50px;
   }

@@ -11,7 +11,9 @@ type SettingsScreenProps = {
   data: BootstrapData;
   health: ApiHealth | null;
   healthError: string | null;
+  accessGrantedAt: string | null;
   appEnvironment: "local/dev" | "preview" | "production";
+  onLockApp: () => void;
 };
 
 const futureItems = ["Push notifications", "Auth", "Integrations", "SMS fallback"];
@@ -23,7 +25,9 @@ export function SettingsScreen({
   data,
   health,
   healthError,
+  accessGrantedAt,
   appEnvironment,
+  onLockApp,
 }: SettingsScreenProps) {
   return (
     <>
@@ -39,6 +43,16 @@ export function SettingsScreen({
           </div>
           {health ? <p className="muted">Last health check: {formatDateTime(health.checked_at)}</p> : null}
           {healthError ? <div className="notice error">{healthError}</div> : null}
+        </section>
+
+        <section className="panel">
+          <h2>Preview access</h2>
+          <div className="status-list">
+            <StatusRow label="Access gate" value="Granted" tone="loaded" />
+            <StatusRow label="Granted at" value={accessGrantedAt ? formatDateTime(accessGrantedAt) : "Unknown"} tone="open" />
+          </div>
+          <p className="muted">This is a temporary preview gate, not real staff authentication. The demo persona switcher is still available after access is granted.</p>
+          <button className="secondary-button" onClick={onLockApp} type="button">Lock app</button>
         </section>
 
         <section className="panel">

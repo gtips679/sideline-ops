@@ -14,6 +14,8 @@ import { MessagesPlaceholder } from "../features/messages/MessagesPlaceholder";
 import { SettingsScreen } from "../features/settings/SettingsScreen";
 import { MyDashboardScreen } from "../features/staff/MyDashboardScreen";
 import { StaffListScreen } from "../features/staff/StaffListScreen";
+import { AccessGate } from "./AccessGate";
+import { clearAccessGrant, getStoredAccess, isLocalHost, storeAccessGrant } from "./access";
 import { adminNav, staffNav, type AppRoute } from "./navigation";
 
 const personaUserIds: Record<PersonaKey, string> = {
@@ -22,7 +24,7 @@ const personaUserIds: Record<PersonaKey, string> = {
   staff: "user_ava",
 };
 
-const appVersion = "0.4.0-dev";
+const appVersion = "0.5.0-dev";
 
 export function App() {
   const [data, setData] = useState<BootstrapData | null>(null);
@@ -30,13 +32,34 @@ export function App() {
   const [health, setHealth] = useState<ApiHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [accessGranted, setAccessGranted] = useState(() => getStoredAccess().granted);
+  const [accessGrantedAt, setAccessGrantedAt] = useState<string | null>(() => getStoredAccess().grantedAt);
   const [persona, setPersona] = useState<PersonaKey>("admin");
   const [route, setRoute] = useState<AppRoute>("dashboard");
 
   useEffect(() => {
-    refreshData();
-    refreshHealth();
-  }, []);
+    if (accessGranted) {
+      refreshData();
+      refreshHealth();
+    }
+  }, [accessGranted]);
+
+  function grantAccess() {
+    const grantedAt = storeAccessGrant();
+    setAccessGrantedAt(grantedAt);
+    setAccessGranted(true);
+  }
+
+  function lockApp() {
+    clearAccessGrant();
+    setAccessGranted(false);
+    setAccessGrantedAt(null);
+    setData(null);
+    setHealth(null);
+    setHealthError(null);
+    setRoute("dashboard");
+    setPersona("admin");
+  }
 
   async function refreshHealth() {
     setHealthError(null);
@@ -80,6 +103,10 @@ export function App() {
     });
   }
 
+  if (!accessGranted) {
+    return <AccessGate onAccessGranted={grantAccess} />;
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -117,7 +144,7 @@ export function App() {
         <main className="content">
           {loadError ? <div className="notice error">{loadError}</div> : null}
           {refreshing && data ? <div className="notice info">Refreshing data...</div> : null}
-          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData, health, healthError) : <LoadingState />}
+          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData, health, healthError, accessGrantedAt, lockApp) : <LoadingState />}
         </main>
         <nav className="mobile-nav" aria-label="Mobile primary">
           {nav.map((item) => {
@@ -142,7 +169,9 @@ function renderRoute(
   updateAvailabilityRequest: (request: AvailabilityRequest) => void,
   refreshData: () => Promise<void>,
   health: ApiHealth | null,
-  healthError: string | null
+  healthError: string | null,
+  accessGrantedAt: string | null,
+  lockApp: () => void
 ) {
   switch (route) {
     case "dashboard":
@@ -184,7 +213,9 @@ function renderRoute(
           data={data}
           health={health}
           healthError={healthError}
+          accessGrantedAt={accessGrantedAt}
           appEnvironment={getAppEnvironment(window.location.hostname)}
+          onLockApp={lockApp}
         />
       );
     case "my-dashboard":
@@ -211,7 +242,7 @@ function renderRoute(
 }
 
 function getAppEnvironment(hostname: string): "local/dev" | "preview" | "production" {
-  if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "") return "local/dev";
+  if (isLocalHost(hostname)) return "local/dev";
   if (hostname.endsWith(".pages.dev") && hostname !== "sideline-ops.pages.dev") return "preview";
   return "production";
 }
