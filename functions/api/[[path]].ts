@@ -1325,7 +1325,7 @@ function parseSkills(value: string | null | undefined): string[] {
 async function hashPassword(password: string) {
   const saltBytes = crypto.getRandomValues(new Uint8Array(16));
   const salt = bytesToBase64Url(saltBytes);
-  const iterations = 210000;
+  const iterations = 100000;
   const keyMaterial = await crypto.subtle.importKey("raw", utf8(password), "PBKDF2", false, ["deriveBits"]);
   const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: saltBytes, iterations, hash: "SHA-256" }, keyMaterial, 256);
   return {
