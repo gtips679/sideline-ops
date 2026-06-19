@@ -35,7 +35,7 @@ export async function sendTestPushNotification(input: {
   userId: string;
   target: "current-device" | "all-user-devices";
   deviceId: string;
-  mode: "empty" | "payload";
+  mode: "empty" | "payload" | "fetch";
 }): Promise<TestPushSummary> {
   return postJson<TestPushSummary>("/api/notifications/test-send", input);
 }

@@ -402,6 +402,16 @@ th {
   border-color: #8fc6a6;
 }
 
+.test-mode-grid article.preferred-test-mode {
+  border-color: #8fc6a6;
+  background: #f2faf5;
+}
+
+.preferred-button-row {
+  padding-bottom: 10px;
+  border-bottom: 1px solid #dfe5dd;
+}
+
 .device-list article > div:first-child,
 .device-meta {
   display: flex;

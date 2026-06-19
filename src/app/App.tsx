@@ -26,7 +26,7 @@ const personaUserIds: Record<PersonaKey, string> = {
   staff: "user_ava",
 };
 
-const appVersion = "1.1.2-dev";
+const appVersion = "1.1.3-dev";
 
 export function App() {
   const [data, setData] = useState<BootstrapData | null>(null);
@@ -173,7 +173,7 @@ export function App() {
     }
   }
 
-  async function sendTestNotification(target: "current-device" | "all-user-devices", mode: "empty" | "payload") {
+  async function sendTestNotification(target: "current-device" | "all-user-devices", mode: "empty" | "payload" | "fetch") {
     if (!currentUser) return;
     setTestPushBusy(true);
     setTestPushResult(null);
@@ -280,7 +280,7 @@ function renderRoute(
   testPushBusy: boolean,
   testPushResult: TestPushSummary | null,
   testPushError: string | null,
-  sendTestNotification: (target: "current-device" | "all-user-devices", mode: "empty" | "payload") => Promise<void>,
+  sendTestNotification: (target: "current-device" | "all-user-devices", mode: "empty" | "payload" | "fetch") => Promise<void>,
   localNotificationMessage: string | null,
   localNotificationError: string | null,
   showLocalNotification: () => Promise<void>

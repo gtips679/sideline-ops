@@ -1,6 +1,6 @@
 # Sideline Ops
 
-Milestone 1.1.2 preview-gated deployable app for Sideline Supplies, a PWA-style concessions and staffing operations app.
+Milestone 1.1.3 preview-gated deployable app for Sideline Supplies, a PWA-style concessions and staffing operations app.
 
 This project includes:
 
@@ -13,7 +13,7 @@ This project includes:
 - Basic PWA manifest/icons
 - Settings/status screen for API, bootstrap, persona, app version, and environment
 - Temporary preview access gate before the demo persona switcher
-- Push notification opt-in, device-aware subscription diagnostics, and empty/payload manual test push sending
+- Push notification opt-in, device-aware diagnostics, and empty-push plus fetched notification test sending
 
 ## Project Structure
 
@@ -118,6 +118,8 @@ This only affects local `.wrangler` state. Do not run destructive reset commands
 - `POST /api/notifications/unsubscribe`
 - `GET /api/notifications/subscriptions?userId=...&deviceId=...`
 - `POST /api/notifications/test-send`
+- `POST /api/notifications/pending`
+- `POST /api/notifications/mark-shown`
 - `GET /api/activity`
 
 ## Cloudflare Pages Compatibility
@@ -248,7 +250,7 @@ https://YOUR_DEPLOYED_URL/api/notifications/config
 
 15. Enter the configured preview access code.
 
-16. Check Settings. It should show API health, bootstrap loaded, access granted, app version `1.1.2-dev`, environment, service worker status, notification permission, this-device status, and selected-persona subscribed devices.
+16. Check Settings. It should show API health, bootstrap loaded, access granted, app version `1.1.3-dev`, environment, service worker status, notification permission, this-device status, and selected-persona subscribed devices.
 
 ## Preview Access Gate
 
@@ -268,7 +270,7 @@ For Cloudflare Pages, set `SIDELINE_ACCESS_CODE` separately for both Preview and
 
 ## Push Notification Opt-In and Test Send
 
-Milestone 1.1.2 registers a service worker, lets each browser/device save or disable its own push subscription, shows device-aware diagnostics in Settings, and adds separate empty-push and encrypted-payload test buttons. It does not automatically send availability-request notifications or any real operational push campaigns yet.
+Milestone 1.1.3 registers a service worker, lets each browser/device save or disable its own push subscription, shows device-aware diagnostics in Settings, and adds a preferred fetched-notification path. It does not automatically send availability-request notifications or any real operational push campaigns yet.
 
 Each browser or installed PWA gets a local diagnostic identity:
 
@@ -300,13 +302,16 @@ Settings separates:
 
 - This device: local device label/id, notification permission, service worker status, and this browser/PWA push subscription.
 - Selected persona devices: active/inactive subscriptions stored for the current demo persona.
-- Test push: send empty or payload pushes to the current device only, or all active devices for the selected persona.
+- Test push: send fetched, empty, or payload pushes to the current device only, or all active devices for the selected persona.
 
-Empty push vs payload push:
+Fetched vs empty vs payload push:
 
-- Empty push sends a Web Push request with VAPID authentication but no body. The service worker should show `Empty push received by Sideline Ops.`
-- Payload push sends the normal encrypted JSON test payload using Web Push `aes128gcm` message encryption.
+- Fetched notification is the preferred path. The server creates a pending `notification_deliveries` row, sends an empty push, and the service worker fetches pending notification content from `/api/notifications/pending`.
+- Empty push sends a Web Push request with VAPID authentication but no body and no pending delivery. The service worker should show `Empty push received by Sideline Ops.`
+- Payload push sends the encrypted JSON test payload using Web Push `aes128gcm` message encryption. Payload push is currently unreliable and remains diagnostic only.
 - Safe debug results include endpoint host, VAPID audience, HTTP status, send mode, success/failure, and whether a subscription was marked inactive. Full endpoints, push keys, auth secrets, and private keys are never returned.
+
+Temporary security note: `/api/notifications/pending` uses the push subscription endpoint as a lookup token because the service worker does not have the preview access gate session. This is acceptable for the current non-sensitive preview test content only. Do not use this path for sensitive notification content until real authentication or device-scoped tokens exist.
 
 Generate VAPID keys locally with a one-time command:
 
@@ -328,15 +333,18 @@ iPhone test-send flow:
 8. Confirm the iPhone appears under the selected persona's subscribed devices.
 9. Tap Show local test notification on the phone.
 10. From desktop, open the same deployed app and select the same persona.
-11. In Settings, send an empty push to the iPhone/current device if testing on the phone, or all devices for that user if testing from desktop.
-12. If empty push works, send a payload push.
-13. Confirm the phone receives the empty fallback or "Test notification from Sideline Ops."
+11. In Settings, send a fetched notification to the iPhone/current device if testing on the phone, or all devices for that user if testing from desktop.
+12. Put the phone on the Home Screen or lock it, then send a fetched notification from desktop to the phone/all devices.
+13. Use empty push only as a delivery diagnostic and payload push only as an encrypted-payload diagnostic.
+14. Confirm the phone receives "Fetched test notification from Sideline Ops."
 
 Diagnostic interpretation:
 
 - Local notification works, empty push fails: likely VAPID/auth/audience/env var or endpoint issue.
-- Local notification works, empty push works, payload push fails: likely Web Push message encryption issue.
-- Local notification works, empty push works, payload push works: server push path is good.
+- Local notification works, empty push works, fetched notification works: usable notification path is good.
+- Local notification works, empty push works, fetched notification fails: check `/api/notifications/pending`, endpoint matching, or delivery rows.
+- Local notification works, empty push works, payload push fails: encrypted payload path still needs future work, but it is not blocking.
+- Local notification works, empty push works, payload push works: encrypted server push path is also good.
 - Empty/payload send says sent but no visible notification: check Focus/Do Not Disturb, app state, iOS notification settings, or endpoint/device/persona mismatch.
 
 iPhone note: Web push is available only after the app is added to the Home Screen and opened from the Home Screen icon. Permission prompts may not appear in ordinary Safari tab mode.
@@ -353,6 +361,7 @@ Notification troubleshooting:
 - If the iPhone is subscribed under a different persona, switch to that persona or resubscribe with the intended persona selected.
 - If a subscription is inactive or expired, subscribe again from Settings. The test-send endpoint marks 404/410 push-service responses inactive.
 - If local notification works but empty server push does not, check VAPID env vars, audience, deployment, subscription targeting, and push-service delivery.
+- If empty push works but fetched notification does not, check pending deliveries, endpoint matching, and service worker fetch access.
 - If empty push works but payload push does not, check Web Push `aes128gcm` encryption and subscription keys.
 - If local notification fails, check permission, PWA install mode, Focus/Do Not Disturb, and service worker status.
 - Redeploy after changing any Cloudflare Pages environment variables.
@@ -388,9 +397,10 @@ Then test the app UI:
 16. If `VAPID_PUBLIC_KEY` is configured, click Enable notifications and confirm subscription status changes to subscribed.
 17. Confirm the current browser appears in Selected persona devices without exposing full endpoints or keys.
 18. Use Show local test notification to confirm the device can display notifications.
-19. If `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` are configured, click empty and payload test push buttons for current device or all devices and confirm attempted/sent/failed counts.
-20. Click Disable notifications and confirm subscription status changes to not subscribed.
-21. Click Lock app and confirm the access gate returns.
+19. If `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` are configured, click fetched notification for current device or all devices and confirm attempted/sent/failed counts and deliveries created.
+20. Use empty and payload buttons only for diagnostics.
+21. Click Disable notifications and confirm subscription status changes to not subscribed.
+22. Click Lock app and confirm the access gate returns.
 
 ## Phone Test Checklist
 
@@ -411,12 +421,13 @@ Use the deployed HTTPS URL for phone testing.
 13. If `VAPID_PUBLIC_KEY` is configured, test Enable notifications.
 14. Confirm the phone appears under the selected persona's subscribed devices and is marked current device.
 15. Tap Show local test notification.
-16. If `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` are configured, tap empty push first, then payload push, and confirm the phone receives them.
-17. Test Disable notifications.
-18. Tap Lock app in Settings and confirm the gate returns.
-19. On Android Chrome, open the deployed URL.
-20. Use Install app or Add to Home screen.
-21. Open from the icon and repeat the access/staff/admin/push-readiness checks.
+16. If `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` are configured, tap Send fetched notification to this device and confirm the phone receives it.
+17. Optionally test empty push as delivery-only diagnostic and payload push as encrypted-payload diagnostic.
+18. Test Disable notifications.
+19. Tap Lock app in Settings and confirm the gate returns.
+20. On Android Chrome, open the deployed URL.
+21. Use Install app or Add to Home screen.
+22. Open from the icon and repeat the access/staff/admin/push-readiness checks.
 
 ## Database Safety
 

@@ -28,12 +28,28 @@ type TestPushResult = {
   device_label: string | null;
   endpoint_host: string;
   audience: string;
-  mode: "empty" | "payload";
+  mode: "empty" | "payload" | "fetch";
   ok: boolean;
   status: number | null;
   marked_inactive: boolean;
+  delivery_id?: string;
   response_text_excerpt?: string;
   error?: string;
+};
+type NotificationDelivery = {
+  id: string;
+  subscription_id: string;
+  user_id: string;
+  device_id: string | null;
+  title: string;
+  body: string;
+  url: string;
+  status: string;
+  created_at: string;
+  fetched_at: string | null;
+  shown_at: string | null;
+  error: string | null;
+  metadata_json: string | null;
 };
 
 const jsonHeaders = {
@@ -88,6 +104,8 @@ async function route(context: ApiContext, method: string, path: string): Promise
   if (method === "POST" && path === "notifications/subscribe") return subscribeToNotifications(context);
   if (method === "POST" && path === "notifications/unsubscribe") return unsubscribeFromNotifications(context);
   if (method === "POST" && path === "notifications/test-send") return sendTestNotification(context);
+  if (method === "POST" && path === "notifications/pending") return getPendingNotifications(context);
+  if (method === "POST" && path === "notifications/mark-shown") return markNotificationsShown(context);
   if (method === "GET" && path === "notifications/subscriptions") return listNotificationSubscriptions(context);
   if (method === "GET" && path === "activity") return listActivity(context.env.SIDELINE_DB);
 
@@ -196,6 +214,74 @@ async function listNotificationSubscriptions(context: ApiContext): Promise<Respo
   });
 }
 
+async function getPendingNotifications(context: ApiContext): Promise<Response> {
+  const body = await readBody(context.request);
+  const endpoint = requireString(body.endpoint, "endpoint");
+  const subscription = await context.env.SIDELINE_DB.prepare(
+    `SELECT id, user_id, device_id, device_label, endpoint, p256dh, auth
+     FROM notification_subscriptions
+     WHERE endpoint = ? AND is_active = 1
+     LIMIT 1`
+  )
+    .bind(endpoint)
+    .first<DbPushSubscription>();
+
+  if (!subscription) {
+    return json({ ok: true, notifications: [] });
+  }
+
+  const deliveries = await context.env.SIDELINE_DB.prepare(
+    `SELECT id, subscription_id, user_id, device_id, title, body, url, status, created_at, fetched_at, shown_at, error, metadata_json
+     FROM notification_deliveries
+     WHERE subscription_id = ? AND status = 'pending'
+     ORDER BY created_at ASC
+     LIMIT 10`
+  )
+    .bind(subscription.id)
+    .all<NotificationDelivery>();
+
+  if (deliveries.results.length > 0) {
+    await context.env.SIDELINE_DB.batch(
+      deliveries.results.map((delivery) =>
+        context.env.SIDELINE_DB.prepare(
+          "UPDATE notification_deliveries SET status = 'fetched', fetched_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'"
+        ).bind(delivery.id)
+      )
+    );
+  }
+
+  return json({
+    ok: true,
+    notifications: deliveries.results.map((delivery) => ({
+      id: delivery.id,
+      title: delivery.title,
+      body: delivery.body,
+      url: delivery.url || "/",
+    })),
+  });
+}
+
+async function markNotificationsShown(context: ApiContext): Promise<Response> {
+  const body = await readBody(context.request);
+  if (!Array.isArray(body.ids)) throw new Error("Missing ids");
+  const ids = body.ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0).map((value) => value.trim());
+  const uniqueIds = Array.from(new Set(ids));
+
+  if (uniqueIds.length === 0) {
+    return json({ ok: true, updated: 0 });
+  }
+
+  const results = await context.env.SIDELINE_DB.batch(
+    uniqueIds.map((id) =>
+      context.env.SIDELINE_DB.prepare(
+        "UPDATE notification_deliveries SET status = 'shown', shown_at = CURRENT_TIMESTAMP WHERE id = ?"
+      ).bind(id)
+    )
+  );
+  const updated = results.reduce((sum, result) => sum + (result.meta.changes ?? 0), 0);
+  return json({ ok: true, updated });
+}
+
 async function sendTestNotification(context: ApiContext): Promise<Response> {
   const body = await readBody(context.request);
   const userId = requireString(body.userId, "userId");
@@ -210,10 +296,10 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
     throw new Error("Invalid target");
   }
 
-  if (!["empty", "payload"].includes(modeInput)) {
+  if (!["empty", "payload", "fetch"].includes(modeInput)) {
     throw new Error("Invalid mode");
   }
-  const mode = modeInput as "empty" | "payload";
+  const mode = modeInput as "empty" | "payload" | "fetch";
 
   if (!vapidPublicKey || !vapidPrivateKey || !vapidSubject) {
     return json(
@@ -249,8 +335,18 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
     url: "/",
   };
   const results: TestPushResult[] = [];
+  let createdDeliveries = 0;
 
   for (const subscription of subscriptions.results) {
+    const deliveryId = mode === "fetch"
+      ? await createNotificationDelivery(context.env.SIDELINE_DB, subscription, {
+        title: "Sideline Ops",
+        body: "Fetched test notification from Sideline Ops.",
+        url: "/",
+      })
+      : undefined;
+    if (deliveryId) createdDeliveries += 1;
+
     try {
       const response = await sendWebPush(subscription, payload, {
         publicKey: vapidPublicKey,
@@ -269,6 +365,7 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
         ok,
         status: response.status,
         marked_inactive: false,
+        delivery_id: deliveryId,
       };
 
       if (!ok) {
@@ -295,6 +392,7 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
         ok: false,
         status: null,
         marked_inactive: false,
+        delivery_id: deliveryId,
         error: err instanceof Error ? err.message : "Push send failed.",
       });
     }
@@ -309,9 +407,35 @@ async function sendTestNotification(context: ApiContext): Promise<Response> {
     failed,
     target,
     mode,
+    created_deliveries: createdDeliveries,
     devicesAttempted: new Set(subscriptions.results.map((subscription) => subscription.device_id).filter(Boolean)).size,
     results,
   });
+}
+
+async function createNotificationDelivery(
+  db: D1Database,
+  subscription: DbPushSubscription,
+  notification: { title: string; body: string; url: string }
+): Promise<string> {
+  const id = crypto.randomUUID();
+  await db.prepare(
+    `INSERT INTO notification_deliveries
+      (id, subscription_id, user_id, device_id, title, body, url, status, created_at, metadata_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, ?)`
+  )
+    .bind(
+      id,
+      subscription.id,
+      subscription.user_id,
+      subscription.device_id,
+      notification.title,
+      notification.body,
+      notification.url,
+      JSON.stringify({ source: "manual_test_send", mode: "fetch" })
+    )
+    .run();
+  return id;
 }
 
 async function markNotificationSubscriptionInactive(db: D1Database, id: string) {
@@ -374,7 +498,7 @@ async function sendWebPush(
   subscription: DbPushSubscription,
   payload: JsonValue,
   vapid: { publicKey: string; privateKey: string; subject: string },
-  mode: "empty" | "payload"
+  mode: "empty" | "payload" | "fetch"
 ): Promise<Response> {
   const endpoint = new URL(subscription.endpoint);
   const authorization = await createVapidAuthorizationHeader(endpoint.origin, vapid);
@@ -385,7 +509,7 @@ async function sendWebPush(
     urgency: "normal",
   };
 
-  if (mode === "empty") {
+  if (mode === "empty" || mode === "fetch") {
     return fetch(subscription.endpoint, {
       method: "POST",
       headers,

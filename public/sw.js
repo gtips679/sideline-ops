@@ -4,6 +4,15 @@ self.addEventListener("push", (event) => {
 
 async function handlePush(event) {
   const payload = parsePushPayload(event);
+  if (!payload) {
+    await showPendingOrFallback();
+    return;
+  }
+
+  await showNotification(payload);
+}
+
+async function showNotification(payload) {
   const title = payload.title || "Sideline Ops";
   const targetUrl = payload.url || "/";
   const options = {
@@ -12,6 +21,7 @@ async function handlePush(event) {
     badge: "/icon-maskable.svg",
     data: {
       url: targetUrl,
+      id: payload.id || null,
     },
   };
 
@@ -19,23 +29,71 @@ async function handlePush(event) {
 }
 
 function parsePushPayload(event) {
-  if (!event.data) {
-    return {
-      title: "Sideline Ops",
-      body: "Empty push received by Sideline Ops.",
-      url: "/",
-    };
-  }
+  if (!event.data) return null;
 
   try {
     return event.data.json();
   } catch {
-    try {
-      return { body: event.data.text() };
-    } catch {
-      return {};
-    }
+    return null;
   }
+}
+
+async function showPendingOrFallback() {
+  try {
+    const subscription = await self.registration.pushManager.getSubscription();
+    const endpoint = subscription?.endpoint;
+    if (!endpoint) {
+      await showFallbackNotification();
+      return;
+    }
+
+    const response = await fetch("/api/notifications/pending", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ endpoint }),
+    });
+
+    if (!response.ok) {
+      await showFallbackNotification();
+      return;
+    }
+
+    const payload = await response.json();
+    const notifications = Array.isArray(payload.notifications) ? payload.notifications : [];
+    if (notifications.length === 0) {
+      await showFallbackNotification();
+      return;
+    }
+
+    const shownIds = [];
+    for (const notification of notifications) {
+      await showNotification({
+        title: notification.title,
+        body: notification.body,
+        url: notification.url || "/",
+        id: notification.id,
+      });
+      if (notification.id) shownIds.push(notification.id);
+    }
+
+    if (shownIds.length > 0) {
+      await fetch("/api/notifications/mark-shown", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: shownIds }),
+      }).catch(() => undefined);
+    }
+  } catch {
+    await showFallbackNotification();
+  }
+}
+
+async function showFallbackNotification() {
+  await showNotification({
+    title: "Sideline Ops",
+    body: "Empty push received by Sideline Ops.",
+    url: "/",
+  });
 }
 
 self.addEventListener("notificationclick", (event) => {

@@ -26,7 +26,7 @@ type SettingsScreenProps = {
   testPushBusy: boolean;
   testPushResult: TestPushSummary | null;
   testPushError: string | null;
-  onSendTestNotification: (target: "current-device" | "all-user-devices", mode: "empty" | "payload") => Promise<void>;
+  onSendTestNotification: (target: "current-device" | "all-user-devices", mode: "empty" | "payload" | "fetch") => Promise<void>;
   localNotificationMessage: string | null;
   localNotificationError: string | null;
   onShowLocalNotification: () => Promise<void>;
@@ -156,12 +156,16 @@ export function SettingsScreen({
 
         <section className="panel push-diagnostics-panel">
           <h2>Test push</h2>
-          <p className="muted">Empty push tests VAPID and delivery without a body. Payload push tests the full encrypted notification path.</p>
+          <p className="muted">Fetched notification is the recommended path: the server queues content, sends an empty wake-up push, and the service worker fetches the notification locally.</p>
           {pushState.pushConfig?.testPushEnabled === false ? (
             <div className="notice info">Server sending also requires VAPID_PRIVATE_KEY and VAPID_SUBJECT.</div>
           ) : null}
           {currentDeviceSubscriptions.length === 0 ? <div className="notice info">Subscribe this device before sending a current-device test.</div> : null}
           <div className="test-mode-grid">
+            <article className="preferred-test-mode">
+              <strong>Fetched notification</strong>
+              <span>Preferred test. Uses empty push plus a service-worker fetch for visible notification content.</span>
+            </article>
             <article>
               <strong>Empty push</strong>
               <span>Delivery diagnostic. The service worker shows its fallback notification when no payload arrives.</span>
@@ -170,6 +174,14 @@ export function SettingsScreen({
               <strong>Payload push</strong>
               <span>Encrypted payload diagnostic using the Sideline Ops JSON test message.</span>
             </article>
+          </div>
+          <div className="button-row preferred-button-row">
+            <button className="primary-button" disabled={!canSendCurrentDevicePush} onClick={() => onSendTestNotification("current-device", "fetch")} type="button">
+              {testPushBusy ? "Sending" : "Send fetched notification to this device"}
+            </button>
+            <button className="primary-button" disabled={!canSendAllDevicePush} onClick={() => onSendTestNotification("all-user-devices", "fetch")} type="button">
+              {testPushBusy ? "Sending" : "Send fetched notification to all devices for selected persona"}
+            </button>
           </div>
           <div className="button-row">
             <button className="secondary-button" disabled={!canSendCurrentDevicePush} onClick={() => onSendTestNotification("current-device", "empty")} type="button">
@@ -242,13 +254,14 @@ export function SettingsScreen({
 function TestPushResultSummary({ result }: { result: TestPushSummary }) {
   return (
     <div className={result.failed > 0 ? "notice info" : "notice success"}>
-      <strong>Test push {result.mode ?? "payload"} / {result.target ?? "manual"}:</strong> attempted {result.attempted}, sent {result.sent}, failed {result.failed}, devices attempted {result.devicesAttempted ?? 0}.
+      <strong>Test push {result.mode ?? "payload"} / {result.target ?? "manual"}:</strong> attempted {result.attempted}, sent {result.sent}, failed {result.failed}, devices attempted {result.devicesAttempted ?? 0}, deliveries created {result.created_deliveries ?? 0}.
       {result.results.length > 0 ? (
         <div className="test-result-list">
           {result.results.map((item) => (
             <span key={item.id}>
               {item.device_label ?? "Unknown device"} ({item.device_id_short ?? "no id"}, {item.endpoint_host}, aud {item.audience ?? "unknown"}, {item.mode ?? "payload"}) - {item.ok ? "sent" : "failed"}
               {item.status ? ` ${item.status}` : ""}
+              {item.delivery_id ? ` delivery ${item.delivery_id.slice(0, 8)}` : ""}
               {item.marked_inactive ? " marked inactive" : ""}
               {item.response_text_excerpt ? ` - ${item.response_text_excerpt}` : ""}
             </span>
