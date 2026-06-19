@@ -84,6 +84,8 @@ type DbInvite = {
   accepted_by_user_id: string | null;
 };
 
+const ownerEmails = new Set(["gtips679@gmail.com"]);
+
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
 };
@@ -328,10 +330,10 @@ async function completeInvite(context: ApiContext, token: string): Promise<Respo
   if (password !== confirmPassword) throw new Error("Passwords do not match");
   if (password.length < 8) throw new Error("Password must be at least 8 characters");
 
-  const existing = await context.env.SIDELINE_DB.prepare("SELECT id FROM users WHERE lower(email) = ? OR phone = ? LIMIT 1")
+  const existing = await context.env.SIDELINE_DB.prepare("SELECT id FROM users WHERE is_active = 1 AND (lower(email) = ? OR phone = ?) LIMIT 1")
     .bind(email, phone)
     .first<{ id: string }>();
-  if (existing) throw new Error("A user with that email or phone already exists");
+  if (existing) throw new Error("An active user with that email or phone already exists");
 
   const passwordRecord = await hashPassword(password);
   const userId = crypto.randomUUID();
@@ -1389,6 +1391,8 @@ function safeUser(user: DbUser | null) {
     phone: user.phone ?? null,
     email: user.email ?? null,
     role: effectiveRole(user),
+    storedRole: user.role,
+    stored_role: user.role,
     is_active: user.is_active,
     emergency_contact_name: user.emergency_contact_name ?? null,
     emergency_contact_phone: user.emergency_contact_phone ?? null,
@@ -1401,7 +1405,9 @@ function safeUser(user: DbUser | null) {
   };
 }
 
-function effectiveRole(user: Pick<DbUser, "id" | "role">): string {
+function effectiveRole(user: Pick<DbUser, "id" | "email" | "role">): string {
+  const email = user.email?.trim().toLowerCase();
+  if (email && ownerEmails.has(email)) return "owner";
   return user.id === "user_glenn" ? "owner" : user.role;
 }
 

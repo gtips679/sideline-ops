@@ -10,6 +10,8 @@ export type User = {
   phone: string | null;
   email: string | null;
   role: UserRole;
+  storedRole?: UserRole;
+  stored_role?: UserRole;
   is_active: number;
   emergency_contact_name?: string | null;
   emergency_contact_phone?: string | null;

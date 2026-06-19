@@ -279,6 +279,9 @@ Roles:
 - Admin cannot change roles and cannot use owner testing/View As.
 - Staff can access only My Dashboard, My Shifts placeholder, Requests, Messages placeholder, Tasks placeholder, and Upload Photos placeholder.
 - Staff cannot access Staff admin, Locations, Events, Availability admin, Reports, Settings/debug, invite tools, or other users' profile data.
+- `gtips679@gmail.com` and `user_glenn` are treated as Owner through effective-role logic even if the stored D1 `users.role` value is `staff` or `admin`.
+- API user payloads return effective `role`; they may also include `storedRole`/`stored_role` for early-schema compatibility visibility.
+- Future cleanup should rebuild or normalize role storage so D1 can store Owner directly without compatibility logic.
 
 Owner View As:
 
