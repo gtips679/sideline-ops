@@ -1,4 +1,3 @@
-import { demoData } from "./demoData";
 import type { ApiHealth, AuthUserResponse, AvailabilityRequest, AvailabilityResponseValue, BootstrapData, CreatedInvite, Event, InviteSummary, Location, NotificationConfig, PushSubscriptionInfo, PushSubscriptionsResponse, TestPushSummary, User } from "./types";
 
 export async function getApiHealth(): Promise<ApiHealth> {
@@ -62,13 +61,9 @@ export async function verifyAccessCode(code: string): Promise<void> {
 }
 
 export async function getBootstrap(): Promise<BootstrapData> {
-  try {
-    const response = await fetch("/api/bootstrap");
-    if (!response.ok) throw new Error("Bootstrap request failed");
-    return (await response.json()) as BootstrapData;
-  } catch {
-    return demoData;
-  }
+  const response = await fetch("/api/bootstrap");
+  if (!response.ok) throw new Error("Bootstrap request failed");
+  return (await response.json()) as BootstrapData;
 }
 
 export async function getAuthMe(): Promise<User | null> {

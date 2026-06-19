@@ -13,9 +13,8 @@ type SettingsScreenProps = {
   data: BootstrapData;
   health: ApiHealth | null;
   healthError: string | null;
-  accessGrantedAt: string | null;
   appEnvironment: "local/dev" | "preview" | "production";
-  onLockApp: () => void;
+  authUser: User;
   pushState: PushUiState;
   pushBusy: boolean;
   onEnableNotifications: () => Promise<void>;
@@ -41,9 +40,8 @@ export function SettingsScreen({
   data,
   health,
   healthError,
-  accessGrantedAt,
   appEnvironment,
-  onLockApp,
+  authUser,
   pushState,
   pushBusy,
   onEnableNotifications,
@@ -66,6 +64,7 @@ export function SettingsScreen({
   const currentDeviceSubscriptions = activeSubscriptions.filter((subscription) => subscription.is_current_device);
   const canSendCurrentDevicePush = !testPushBusy && currentDeviceSubscriptions.length > 0;
   const canSendAllDevicePush = !testPushBusy && activeSubscriptions.length > 0;
+  const isOwner = authUser.role === "owner";
 
   return (
     <>
@@ -84,13 +83,13 @@ export function SettingsScreen({
         </section>
 
         <section className="panel">
-          <h2>Preview access</h2>
+          <h2>Signed-in account</h2>
           <div className="status-list">
-            <StatusRow label="Access gate" value="Granted" tone="loaded" />
-            <StatusRow label="Granted at" value={accessGrantedAt ? formatDateTime(accessGrantedAt) : "Unknown"} tone="open" />
+            <StatusRow label="Authenticated as" value={authUser.display_name} tone="loaded" />
+            <StatusRow label="Session role" value={authUser.role} tone={authUser.role === "owner" ? "production" : "open"} />
+            {isOwner ? <StatusRow label="Viewing as" value={`${currentUser.display_name} / ${currentUser.role}`} tone="preview" /> : null}
           </div>
-          <p className="muted">This is a temporary preview gate, not real staff authentication. The demo persona switcher is still available after access is granted.</p>
-          <button className="secondary-button" onClick={onLockApp} type="button">Lock app</button>
+          <p className="muted">Normal app access now uses login sessions. The old access-code gate is retained only as fallback code and no longer blocks logged-in use.</p>
         </section>
 
         <section className="panel push-diagnostics-panel">
@@ -122,7 +121,7 @@ export function SettingsScreen({
         </section>
 
         <section className="panel push-diagnostics-panel">
-          <h2>Selected persona devices</h2>
+          <h2>{isOwner ? "Viewed user devices" : "Account devices"}</h2>
           <div className="summary-block">
             <strong>{currentUser.display_name}</strong>
             <span>{currentUser.email ?? "No email set"}</span>
@@ -134,7 +133,7 @@ export function SettingsScreen({
           </div>
           {subscriptionsError ? <div className="notice error">{subscriptionsError}</div> : null}
           {subscriptions.length === 0 ? (
-            <EmptyState title="No subscribed devices yet" message="Enable notifications on a browser or installed PWA while this persona is selected." />
+            <EmptyState title="No subscribed devices yet" message="Enable notifications on a browser or installed PWA while this user is selected." />
           ) : (
             <div className="device-list">
               {subscriptions.map((subscription) => (
@@ -180,7 +179,7 @@ export function SettingsScreen({
               {testPushBusy ? "Sending" : "Send fetched notification to this device"}
             </button>
             <button className="primary-button" disabled={!canSendAllDevicePush} onClick={() => onSendTestNotification("all-user-devices", "fetch")} type="button">
-              {testPushBusy ? "Sending" : "Send fetched notification to all devices for selected persona"}
+              {testPushBusy ? "Sending" : "Send fetched notification to all devices for selected user"}
             </button>
           </div>
           <div className="button-row">
@@ -191,10 +190,10 @@ export function SettingsScreen({
               {testPushBusy ? "Sending" : "Send payload push to this device"}
             </button>
             <button className="secondary-button" disabled={!canSendAllDevicePush} onClick={() => onSendTestNotification("all-user-devices", "empty")} type="button">
-              {testPushBusy ? "Sending" : "Send empty push to all devices for selected persona"}
+              {testPushBusy ? "Sending" : "Send empty push to all devices for selected user"}
             </button>
             <button className="secondary-button" disabled={!canSendAllDevicePush} onClick={() => onSendTestNotification("all-user-devices", "payload")} type="button">
-              {testPushBusy ? "Sending" : "Send payload push to all devices for selected persona"}
+              {testPushBusy ? "Sending" : "Send payload push to all devices for selected user"}
             </button>
           </div>
           {testPushResult ? <TestPushResultSummary result={testPushResult} /> : null}
@@ -203,18 +202,18 @@ export function SettingsScreen({
             <p>On iPhone, subscribe from the Home Screen installed app.</p>
             <p>If local test works but server push does not, check VAPID, delivery, and subscription targeting.</p>
             <p>If local test fails, check permission, PWA install mode, and service worker registration.</p>
-            <p>If the wrong device receives the push, check the selected persona and device list.</p>
+            <p>If the wrong device receives the push, check the signed-in or Owner View As user and device list.</p>
           </div>
         </section>
 
         <section className="panel">
-          <h2>Current persona</h2>
+          <h2>{isOwner ? "Owner testing" : "Current account"}</h2>
           <div className="summary-block">
             <strong>{currentUser.display_name}</strong>
             <span>{currentUser.email ?? "No email set"}</span>
             <StatusPill status={currentUser.role} />
           </div>
-          <p className="muted">Temporary persona switching is for demo and workflow testing only. Real authentication is intentionally out of scope for this milestone.</p>
+          <p className="muted">{isOwner ? "Owner-only View As is available for testing Admin and Staff screens without signing out." : "View As testing is owner-only and hidden for Admin and Staff accounts."}</p>
         </section>
 
         <section className="panel">

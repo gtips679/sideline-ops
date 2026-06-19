@@ -18,8 +18,7 @@ import { MessagesPlaceholder } from "../features/messages/MessagesPlaceholder";
 import { SettingsScreen } from "../features/settings/SettingsScreen";
 import { MyDashboardScreen } from "../features/staff/MyDashboardScreen";
 import { StaffListScreen } from "../features/staff/StaffListScreen";
-import { AccessGate } from "./AccessGate";
-import { clearAccessGrant, getStoredAccess, isLocalHost, storeAccessGrant } from "./access";
+import { isLocalHost } from "./access";
 import { adminNav, staffNav, type AppRoute } from "./navigation";
 
 const personaUserIds: Record<PersonaKey, string> = {
@@ -28,7 +27,7 @@ const personaUserIds: Record<PersonaKey, string> = {
   staff: "user_ava",
 };
 
-const appVersion = "2.0.0-dev";
+const appVersion = "2.0.1-dev";
 
 export function App() {
   const [path, setPath] = useState(() => window.location.pathname);
@@ -47,8 +46,6 @@ export function App() {
   const [localNotificationMessage, setLocalNotificationMessage] = useState<string | null>(null);
   const [localNotificationError, setLocalNotificationError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [accessGranted, setAccessGranted] = useState(() => getStoredAccess().granted);
-  const [accessGrantedAt, setAccessGrantedAt] = useState<string | null>(() => getStoredAccess().grantedAt);
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [persona, setPersona] = useState<PersonaKey>("admin");
@@ -65,29 +62,12 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (accessGranted || authUser) {
+    if (authUser) {
       refreshData();
       refreshHealth();
       refreshPushState();
     }
-  }, [accessGranted, authUser?.id]);
-
-  function grantAccess() {
-    const grantedAt = storeAccessGrant();
-    setAccessGrantedAt(grantedAt);
-    setAccessGranted(true);
-  }
-
-  function lockApp() {
-    clearAccessGrant();
-    setAccessGranted(false);
-    setAccessGrantedAt(null);
-    setData(null);
-    setHealth(null);
-    setHealthError(null);
-    setRoute("dashboard");
-    setPersona("admin");
-  }
+  }, [authUser?.id]);
 
   async function signOut() {
     await logout();
@@ -137,24 +117,33 @@ export function App() {
   }
 
   const currentUser = useMemo(() => {
+    if (authUser?.role === "owner" && data) {
+      return data.users.find((user) => user.id === personaUserIds[persona]) ?? authUser;
+    }
     if (authUser && data) return data.users.find((user) => user.id === authUser.id) ?? authUser;
     if (authUser) return authUser;
-    if (!data) return null;
-    return data.users.find((user) => user.id === personaUserIds[persona]) ?? data.users[0] ?? null;
+    return null;
   }, [authUser, data, persona]);
 
-  const isStaffView = authUser ? authUser.role === "staff" : persona === "staff";
+  const isStaffView = currentUser?.role === "staff";
   const nav = isStaffView ? staffNav : adminNav;
+  const canUseOwnerTesting = authUser?.role === "owner";
 
   useEffect(() => {
-    if (accessGranted && currentUser) {
+    if (authUser && currentUser) {
       refreshSubscriptions(currentUser.id);
     }
-  }, [accessGranted, currentUser?.id]);
+  }, [authUser?.id, currentUser?.id]);
 
   useEffect(() => {
-    setRoute(isStaffView ? "my-dashboard" : "dashboard");
-  }, [isStaffView]);
+    if (!currentUser) return;
+    if (currentUser.role === "staff" && !staffNav.some((item) => item.id === route)) {
+      setRoute("my-dashboard");
+    }
+    if (currentUser.role !== "staff" && !adminNav.some((item) => item.id === route)) {
+      setRoute("dashboard");
+    }
+  }, [currentUser?.role, route]);
 
   function updateAvailabilityRequest(updated: AvailabilityRequest) {
     if (!data) return;
@@ -231,7 +220,7 @@ export function App() {
     return <InviteSetupScreen token={decodeURIComponent(path.replace("/invite/", ""))} onComplete={() => setPath("/login")} />;
   }
 
-  if (path === "/login") {
+  if (path === "/login" && (!authChecked || !authUser)) {
     return <LoginScreen onLoggedIn={(user) => {
       setAuthUser(user);
       window.history.pushState(null, "", "/");
@@ -244,8 +233,22 @@ export function App() {
     return <LoadingState />;
   }
 
-  if (!accessGranted && !authUser) {
-    return <AccessGate onAccessGranted={grantAccess} />;
+  if (authUser && path === "/login") {
+    window.history.replaceState(null, "", "/");
+    setPath("/");
+  }
+
+  if (!authUser) {
+    if (path !== "/login") {
+      window.history.replaceState(null, "", "/login");
+      setPath("/login");
+    }
+    return <LoginScreen onLoggedIn={(user) => {
+      setAuthUser(user);
+      window.history.pushState(null, "", "/");
+      setPath("/");
+      setRoute(user.role === "staff" ? "my-dashboard" : "dashboard");
+    }} />;
   }
 
   return (
@@ -274,19 +277,20 @@ export function App() {
             <strong>{currentUser ? `${currentUser.display_name} / ${currentUser.role}` : "Loading"}</strong>
           </div>
           <label className="persona-switcher">
-            {authUser ? (
+            {canUseOwnerTesting ? (
               <>
-                <span>Signed in</span>
+                <span>Owner Testing</span>
+                <select value={persona} onChange={(event) => setPersona(event.target.value as PersonaKey)}>
+                  <option value="admin">View as Glenn / Owner</option>
+                  <option value="manager">View as Admin</option>
+                  <option value="staff">View as Staff</option>
+                </select>
                 <button className="secondary-button compact-button" onClick={signOut} type="button">Sign out</button>
               </>
             ) : (
               <>
-                <span>Persona</span>
-                <select value={persona} onChange={(event) => setPersona(event.target.value as PersonaKey)}>
-                  <option value="admin">Glenn / Owner</option>
-                  <option value="manager">Admin</option>
-                  <option value="staff">Staff</option>
-                </select>
+                <span>Signed in</span>
+                <button className="secondary-button compact-button" onClick={signOut} type="button">Sign out</button>
               </>
             )}
           </label>
@@ -294,7 +298,7 @@ export function App() {
         <main className="content">
           {loadError ? <div className="notice error">{loadError}</div> : null}
           {refreshing && data ? <div className="notice info">Refreshing data...</div> : null}
-          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData, health, healthError, accessGrantedAt, lockApp, pushState, pushBusy, enableNotifications, disableNotifications, deviceInfo, subscriptions, subscriptionsError, testPushBusy, testPushResult, testPushError, sendTestNotification, localNotificationMessage, localNotificationError, showLocalNotification, setRoute) : <LoadingState />}
+          {data && currentUser ? renderRoute(route, data, currentUser, authUser, updateAvailabilityRequest, refreshData, health, healthError, pushState, pushBusy, enableNotifications, disableNotifications, deviceInfo, subscriptions, subscriptionsError, testPushBusy, testPushResult, testPushError, sendTestNotification, localNotificationMessage, localNotificationError, showLocalNotification, setRoute) : <LoadingState />}
         </main>
         <nav className="mobile-nav" aria-label="Mobile primary">
           {nav.map((item) => {
@@ -316,12 +320,11 @@ function renderRoute(
   route: AppRoute,
   data: BootstrapData,
   currentUser: User,
+  authUser: User,
   updateAvailabilityRequest: (request: AvailabilityRequest) => void,
   refreshData: () => Promise<void>,
   health: ApiHealth | null,
   healthError: string | null,
-  accessGrantedAt: string | null,
-  lockApp: () => void,
   pushState: PushUiState,
   pushBusy: boolean,
   enableNotifications: () => Promise<void>,
@@ -338,6 +341,14 @@ function renderRoute(
   showLocalNotification: () => Promise<void>,
   setRoute: (route: AppRoute) => void
 ) {
+  const currentRole = currentUser.role;
+  if (currentRole === "staff" && !staffNav.some((item) => item.id === route)) {
+    return <AccessDenied onHome={() => setRoute("my-dashboard")} />;
+  }
+  if (currentRole !== "staff" && !adminNav.some((item) => item.id === route)) {
+    return <AccessDenied onHome={() => setRoute("dashboard")} />;
+  }
+
   switch (route) {
     case "dashboard":
       return <AdminDashboardScreen events={data.events} requests={data.availabilityRequests} users={data.users} activity={data.activity} />;
@@ -378,9 +389,8 @@ function renderRoute(
           data={data}
           health={health}
           healthError={healthError}
-          accessGrantedAt={accessGrantedAt}
           appEnvironment={getAppEnvironment(window.location.hostname)}
-          onLockApp={lockApp}
+          authUser={authUser}
           pushState={pushState}
           pushBusy={pushBusy}
           onEnableNotifications={enableNotifications}
@@ -431,6 +441,16 @@ function LoadingState() {
     <section className="panel">
       <h1>Loading Sideline Ops</h1>
       <p className="muted">Preparing the operations shell.</p>
+    </section>
+  );
+}
+
+function AccessDenied({ onHome }: { onHome: () => void }) {
+  return (
+    <section className="panel">
+      <h1>Access denied</h1>
+      <p className="muted">Your account does not have access to that area.</p>
+      <button className="primary-button" onClick={onHome} type="button">Go to dashboard</button>
     </section>
   );
 }

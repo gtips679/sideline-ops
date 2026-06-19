@@ -1,6 +1,7 @@
 export type Env = {
   SIDELINE_DB: D1Database;
   SIDELINE_ACCESS_CODE?: string;
+  SIDELINE_OWNER_BOOTSTRAP_CODE?: string;
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
@@ -108,7 +109,7 @@ export async function handleApiPath(context: ApiContext, method: string, path: s
     return withCors(response);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected API error";
-    const status = message.startsWith("Missing") || message.startsWith("Invalid") ? 400 : 500;
+    const status = message === "Authentication required" ? 401 : message === "Forbidden" ? 403 : message.startsWith("Missing") || message.startsWith("Invalid") ? 400 : 500;
     return withCors(json({ error: message }, status));
   }
 }
@@ -122,7 +123,7 @@ async function route(context: ApiContext, method: string, path: string): Promise
   }
 
   if (method === "GET" && path === "health") return getHealth();
-  if (method === "GET" && path === "bootstrap") return getBootstrap(context.env.SIDELINE_DB);
+  if (method === "GET" && path === "bootstrap") return getBootstrap(context);
   if (method === "POST" && path === "auth/login") return login(context);
   if (method === "POST" && path === "auth/logout") return logout(context);
   if (method === "GET" && path === "auth/me") return getAuthMe(context);
@@ -130,15 +131,15 @@ async function route(context: ApiContext, method: string, path: string): Promise
   if (method === "GET" && path === "invites") return listInvites(context);
   if (method === "GET" && path.startsWith("invites/")) return getInvite(context, path.split("/")[1] ?? "");
   if (method === "POST" && path.startsWith("invites/") && path.endsWith("/complete")) return completeInvite(context, path.split("/")[1] ?? "");
-  if (method === "GET" && path === "users") return listUsers(context.env.SIDELINE_DB);
+  if (method === "GET" && path === "users") return listUsers(context);
   if (method === "POST" && path === "users") return createUser(context);
   if (method === "PATCH" && path.startsWith("users/")) return updateUserProfile(context, path.split("/")[1] ?? "");
   if (method === "POST" && path.startsWith("users/") && path.endsWith("/resend-invite")) return createInvite(context, path.split("/")[1] ?? "");
-  if (method === "GET" && path === "locations") return listLocations(context.env.SIDELINE_DB);
+  if (method === "GET" && path === "locations") return listLocations(context);
   if (method === "POST" && path === "locations") return createLocation(context);
-  if (method === "GET" && path === "events") return listEvents(context.env.SIDELINE_DB);
+  if (method === "GET" && path === "events") return listEvents(context);
   if (method === "POST" && path === "events") return createEvent(context);
-  if (method === "GET" && path === "availability-requests") return listAvailabilityRequests(context.env.SIDELINE_DB);
+  if (method === "GET" && path === "availability-requests") return listAvailabilityRequests(context);
   if (method === "POST" && path === "availability-requests") return createAvailabilityRequest(context);
   if (method === "POST" && path === "availability-responses") return upsertAvailabilityResponse(context);
   if (method === "POST" && path === "notifications/subscribe") return subscribeToNotifications(context);
@@ -147,7 +148,7 @@ async function route(context: ApiContext, method: string, path: string): Promise
   if (method === "POST" && path === "notifications/pending") return getPendingNotifications(context);
   if (method === "POST" && path === "notifications/mark-shown") return markNotificationsShown(context);
   if (method === "GET" && path === "notifications/subscriptions") return listNotificationSubscriptions(context);
-  if (method === "GET" && path === "activity") return listActivity(context.env.SIDELINE_DB);
+  if (method === "GET" && path === "activity") return listActivity(context);
 
   return json({ error: `No route for ${method} /api/${path}` }, 404);
 }
@@ -190,6 +191,12 @@ async function login(context: ApiContext): Promise<Response> {
   }
 
   if (!user.password_hash || !user.password_salt || !user.password_iterations) {
+    const bootstrapCode = stringValue(body.bootstrap_code);
+    if (user.id === "user_glenn" && isValidOwnerBootstrapCode(context, bootstrapCode)) {
+      await setUserPassword(context.env.SIDELINE_DB, user.id, password);
+      const updatedUser = await getUserById(context.env.SIDELINE_DB, user.id);
+      if (updatedUser) return createLoginSession(context, updatedUser);
+    }
     return json({ error: "This account does not have a password set yet. Use an invite or ask an owner/admin for help." }, 401);
   }
 
@@ -198,6 +205,22 @@ async function login(context: ApiContext): Promise<Response> {
     return json({ error: "Invalid login or inactive account." }, 401);
   }
 
+  return createLoginSession(context, user);
+}
+
+async function logout(context: ApiContext): Promise<Response> {
+  const token = getCookie(context.request, "sideline_session");
+  if (token) {
+    await context.env.SIDELINE_DB.prepare("UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ?")
+      .bind(await hashToken(token))
+      .run();
+  }
+  return json({ ok: true }, 200, {
+    "set-cookie": "sideline_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+  });
+}
+
+async function createLoginSession(context: ApiContext, user: DbUser): Promise<Response> {
   const token = randomToken();
   const sessionId = crypto.randomUUID();
   const expiresAt = dateAfterDays(90);
@@ -213,16 +236,21 @@ async function login(context: ApiContext): Promise<Response> {
   });
 }
 
-async function logout(context: ApiContext): Promise<Response> {
-  const token = getCookie(context.request, "sideline_session");
-  if (token) {
-    await context.env.SIDELINE_DB.prepare("UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ?")
-      .bind(await hashToken(token))
-      .run();
-  }
-  return json({ ok: true }, 200, {
-    "set-cookie": "sideline_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
-  });
+async function setUserPassword(db: D1Database, userId: string, password: string) {
+  const passwordRecord = await hashPassword(password);
+  await db.prepare(
+    `UPDATE users
+     SET password_hash = ?, password_salt = ?, password_iterations = ?, password_algorithm = ?,
+         password_updated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  )
+    .bind(passwordRecord.hash, passwordRecord.salt, passwordRecord.iterations, passwordRecord.algorithm, userId)
+    .run();
+}
+
+function isValidOwnerBootstrapCode(context: ApiContext, submittedCode: string | null): boolean {
+  const expectedCode = context.env.SIDELINE_OWNER_BOOTSTRAP_CODE;
+  return Boolean(expectedCode && submittedCode && timingSafeEqual(submittedCode, expectedCode));
 }
 
 async function getAuthMe(context: ApiContext): Promise<Response> {
@@ -347,8 +375,12 @@ async function completeInvite(context: ApiContext, token: string): Promise<Respo
 }
 
 async function subscribeToNotifications(context: ApiContext): Promise<Response> {
+  const actor = await requireSessionUser(context);
   const body = await readBody(context.request);
   const userId = requireString(body.userId, "userId");
+  if (actor.id !== userId && !["owner", "admin"].includes(effectiveRole(actor))) {
+    return json({ error: "Forbidden" }, 403);
+  }
   const deviceId = requireString(body.deviceId, "deviceId");
   const deviceLabel = requireString(body.deviceLabel, "deviceLabel");
   const endpoint = requireString(body.endpoint, "endpoint");
@@ -385,33 +417,43 @@ async function subscribeToNotifications(context: ApiContext): Promise<Response> 
 }
 
 async function unsubscribeFromNotifications(context: ApiContext): Promise<Response> {
+  const actor = await requireSessionUser(context);
   const body = await readBody(context.request);
   const endpoint = stringValue(body.endpoint);
   const deviceId = stringValue(body.deviceId);
 
   if (!endpoint && !deviceId) throw new Error("Missing endpoint or deviceId");
 
+  const isAdmin = ["owner", "admin"].includes(effectiveRole(actor));
   const result = endpoint
     ? await context.env.SIDELINE_DB.prepare(
-        "UPDATE notification_subscriptions SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE endpoint = ?"
+        `UPDATE notification_subscriptions
+         SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+         WHERE endpoint = ? ${isAdmin ? "" : "AND user_id = ?"}`
       )
-        .bind(endpoint)
+        .bind(...(isAdmin ? [endpoint] : [endpoint, actor.id]))
         .run()
     : await context.env.SIDELINE_DB.prepare(
-        "UPDATE notification_subscriptions SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE device_id = ? AND is_active = 1"
+        `UPDATE notification_subscriptions
+         SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+         WHERE device_id = ? AND is_active = 1 ${isAdmin ? "" : "AND user_id = ?"}`
       )
-        .bind(deviceId)
+        .bind(...(isAdmin ? [deviceId] : [deviceId, actor.id]))
         .run();
 
   return json({ ok: true, updated: result.meta.changes ?? 0 });
 }
 
 async function listNotificationSubscriptions(context: ApiContext): Promise<Response> {
+  const actor = await requireSessionUser(context);
   const url = new URL(context.request.url);
   const userId = url.searchParams.get("userId")?.trim();
   const deviceId = url.searchParams.get("deviceId")?.trim() || null;
 
   if (!userId) throw new Error("Missing userId");
+  if (actor.id !== userId && !["owner", "admin"].includes(effectiveRole(actor))) {
+    return json({ error: "Forbidden" }, 403);
+  }
 
   const result = await context.env.SIDELINE_DB.prepare(
     `SELECT id, user_id, device_id, device_label, endpoint, is_active, created_at, updated_at, last_seen_at
@@ -496,8 +538,12 @@ async function markNotificationsShown(context: ApiContext): Promise<Response> {
 }
 
 async function sendTestNotification(context: ApiContext): Promise<Response> {
+  const actor = await requireSessionUser(context);
   const body = await readBody(context.request);
   const userId = requireString(body.userId, "userId");
+  if (actor.id !== userId && !["owner", "admin"].includes(effectiveRole(actor))) {
+    return json({ error: "Forbidden" }, 403);
+  }
   const target = requireString(body.target, "target");
   const deviceId = requireString(body.deviceId, "deviceId");
   const modeInput = stringValue(body.mode) || "payload";
@@ -826,7 +872,30 @@ function getHealth(): Response {
   });
 }
 
-async function getBootstrap(db: D1Database): Promise<Response> {
+async function getBootstrap(context: ApiContext): Promise<Response> {
+  const user = await requireSessionUser(context);
+  const db = context.env.SIDELINE_DB;
+  if (effectiveRole(user) === "staff") {
+    const [locations, availability] = await Promise.all([
+      getLocations(db),
+      getAvailabilityRequests(db),
+    ]);
+    return json({
+      users: [safeUser(user)],
+      locations: [],
+      events: [],
+      availabilityRequests: availability
+        .filter((request) => request.recipients.some((recipient) => recipient.user_id === user.id))
+        .map((request) => ({
+          ...request,
+          recipients: request.recipients.filter((recipient) => recipient.user_id === user.id),
+          responses: request.responses.filter((response) => response.user_id === user.id),
+        })),
+      activity: [],
+      locationCount: locations.length,
+    });
+  }
+
   const [users, locations, events, availability, activity] = await Promise.all([
     getUsers(db),
     getLocations(db),
@@ -844,11 +913,13 @@ async function getBootstrap(db: D1Database): Promise<Response> {
   });
 }
 
-async function listUsers(db: D1Database): Promise<Response> {
-  return json({ users: await getUsers(db) });
+async function listUsers(context: ApiContext): Promise<Response> {
+  await requireAdminActor(context);
+  return json({ users: await getUsers(context.env.SIDELINE_DB) });
 }
 
 async function createUser(context: ApiContext): Promise<Response> {
+  const actor = await requireAdminActor(context);
   const body = await readBody(context.request);
   const id = stringValue(body.id) || crypto.randomUUID();
   const displayName = requireString(body.display_name, "display_name");
@@ -865,7 +936,7 @@ async function createUser(context: ApiContext): Promise<Response> {
     .bind(id, displayName, stringValue(body.phone), stringValue(body.email), role, boolToInt(body.is_active, true))
     .run();
 
-  await logActivity(context.env.SIDELINE_DB, stringValue(body.actor_user_id), "user", id, "created", `${displayName} was added.`);
+  await logActivity(context.env.SIDELINE_DB, actor.id, "user", id, "created", `${displayName} was added.`);
   return json({ user: await getById(context.env.SIDELINE_DB, "users", id) }, 201);
 }
 
@@ -923,11 +994,13 @@ async function updateUserProfile(context: ApiContext, userId: string): Promise<R
   return json({ user: safeUser(await getUserById(context.env.SIDELINE_DB, userId)) });
 }
 
-async function listLocations(db: D1Database): Promise<Response> {
-  return json({ locations: await getLocations(db) });
+async function listLocations(context: ApiContext): Promise<Response> {
+  await requireAdminActor(context);
+  return json({ locations: await getLocations(context.env.SIDELINE_DB) });
 }
 
 async function createLocation(context: ApiContext): Promise<Response> {
+  const actor = await requireAdminActor(context);
   const body = await readBody(context.request);
   const id = stringValue(body.id) || crypto.randomUUID();
   const name = requireString(body.name, "name");
@@ -939,15 +1012,17 @@ async function createLocation(context: ApiContext): Promise<Response> {
     .bind(id, name, requireString(body.location_type, "location_type"), stringValue(body.notes), boolToInt(body.is_active, true))
     .run();
 
-  await logActivity(context.env.SIDELINE_DB, stringValue(body.actor_user_id), "location", id, "created", `${name} was added.`);
+  await logActivity(context.env.SIDELINE_DB, actor.id, "location", id, "created", `${name} was added.`);
   return json({ location: await getById(context.env.SIDELINE_DB, "locations", id) }, 201);
 }
 
-async function listEvents(db: D1Database): Promise<Response> {
-  return json({ events: await getEvents(db) });
+async function listEvents(context: ApiContext): Promise<Response> {
+  await requireAdminActor(context);
+  return json({ events: await getEvents(context.env.SIDELINE_DB) });
 }
 
 async function createEvent(context: ApiContext): Promise<Response> {
+  const actor = await requireAdminActor(context);
   const body = await readBody(context.request);
   const id = stringValue(body.id) || crypto.randomUUID();
   const title = requireString(body.title, "title");
@@ -969,19 +1044,33 @@ async function createEvent(context: ApiContext): Promise<Response> {
     )
     .run();
 
-  await logActivity(context.env.SIDELINE_DB, stringValue(body.actor_user_id), "event", id, "created", `${title} was added.`);
+  await logActivity(context.env.SIDELINE_DB, actor.id, "event", id, "created", `${title} was added.`);
   return json({ event: await getById(context.env.SIDELINE_DB, "events", id) }, 201);
 }
 
-async function listAvailabilityRequests(db: D1Database): Promise<Response> {
-  return json({ availabilityRequests: await getAvailabilityRequests(db) });
+async function listAvailabilityRequests(context: ApiContext): Promise<Response> {
+  const user = await requireSessionUser(context);
+  const requests = await getAvailabilityRequests(context.env.SIDELINE_DB);
+  if (effectiveRole(user) === "staff") {
+    return json({
+      availabilityRequests: requests
+        .filter((request) => request.recipients.some((recipient) => recipient.user_id === user.id))
+        .map((request) => ({
+          ...request,
+          recipients: request.recipients.filter((recipient) => recipient.user_id === user.id),
+          responses: request.responses.filter((response) => response.user_id === user.id),
+        })),
+    });
+  }
+  return json({ availabilityRequests: requests });
 }
 
 async function createAvailabilityRequest(context: ApiContext): Promise<Response> {
+  const actor = await requireAdminActor(context);
   const body = await readBody(context.request);
   const id = stringValue(body.id) || crypto.randomUUID();
   const title = requireString(body.title, "title");
-  const actorId = requireString(body.created_by_user_id, "created_by_user_id");
+  const actorId = actor.id;
   const recipientUserIds = await resolveRecipientUserIds(context.env.SIDELINE_DB, body);
 
   if (recipientUserIds.length === 0) {
@@ -1024,10 +1113,14 @@ async function createAvailabilityRequest(context: ApiContext): Promise<Response>
 }
 
 async function upsertAvailabilityResponse(context: ApiContext): Promise<Response> {
+  const sessionUser = await requireSessionUser(context);
   const body = await readBody(context.request);
   const requestId = requireString(body.request_id, "request_id");
   const userId = requireString(body.user_id, "user_id");
   const response = requireString(body.response, "response");
+  if (effectiveRole(sessionUser) === "staff" && sessionUser.id !== userId) {
+    return json({ error: "Staff can only update their own availability responses." }, 403);
+  }
 
   if (!["yes", "no", "maybe"].includes(response)) {
     throw new Error("Invalid response");
@@ -1070,8 +1163,9 @@ async function upsertAvailabilityResponse(context: ApiContext): Promise<Response
   return json({ availabilityRequest: await getAvailabilityRequestById(context.env.SIDELINE_DB, requestId) }, 201);
 }
 
-async function listActivity(db: D1Database): Promise<Response> {
-  return json({ activity: await getActivity(db) });
+async function listActivity(context: ApiContext): Promise<Response> {
+  await requireAdminActor(context);
+  return json({ activity: await getActivity(context.env.SIDELINE_DB) });
 }
 
 async function getUsers(db: D1Database) {
@@ -1196,17 +1290,27 @@ async function logActivity(
 }
 
 async function requireAdminActor(context: ApiContext): Promise<DbUser> {
-  const sessionUser = await getCurrentSessionUser(context);
-  const body = mutableMethods.has(context.request.method.toUpperCase()) ? await context.request.clone().json().catch(() => null) : null;
-  const url = new URL(context.request.url);
-  const actorId = body && typeof body === "object" && !Array.isArray(body) && typeof (body as { actor_user_id?: unknown }).actor_user_id === "string"
-    ? (body as { actor_user_id: string }).actor_user_id
-    : url.searchParams.get("actor_user_id");
-  const actor = sessionUser ?? (actorId ? await getUserById(context.env.SIDELINE_DB, actorId) : null);
-  if (!actor || !["owner", "admin"].includes(effectiveRole(actor)) || !actor.is_active) {
-    throw new Error("Missing owner/admin actor");
+  const actor = await requireSessionUser(context);
+  if (!["owner", "admin"].includes(effectiveRole(actor))) {
+    throw new Error("Forbidden");
   }
   return actor;
+}
+
+async function requireOwnerActor(context: ApiContext): Promise<DbUser> {
+  const actor = await requireSessionUser(context);
+  if (effectiveRole(actor) !== "owner") {
+    throw new Error("Forbidden");
+  }
+  return actor;
+}
+
+async function requireSessionUser(context: ApiContext): Promise<DbUser> {
+  const user = await getCurrentSessionUser(context);
+  if (!user) {
+    throw new Error("Authentication required");
+  }
+  return user;
 }
 
 async function getCurrentSessionUser(context: ApiContext): Promise<DbUser | null> {

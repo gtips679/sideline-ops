@@ -1,19 +1,19 @@
 # Sideline Ops
 
-Milestone 2.0A preview-gated deployable app for Sideline Supplies, a PWA-style concessions and staffing operations app.
+Milestone 2.0B login-first deployable app for Sideline Supplies, a PWA-style concessions and staffing operations app.
 
 This project includes:
 
 - React, TypeScript, and Vite frontend
 - Cloudflare Pages-compatible Functions API under `functions/api`
 - Cloudflare D1 schema and demo seed data under `migrations`
-- Temporary persona switcher for Glenn/Owner, Admin, and Staff
-- Parallel early account foundation with staff invites, password setup, login sessions, and staff profile management
+- Login-first account access with Owner/Admin/Staff role-based UI and API permissions
+- Owner-only View As testing tool for Glenn
+- Staff invites, password setup, login sessions, and staff profile management
 - Admin create forms for staff, locations, events, and availability requests
 - Targeted availability requests with recipient-aware response counts
 - Basic PWA manifest/icons
-- Settings/status screen for API, bootstrap, persona, app version, and environment
-- Temporary preview access gate before the demo persona switcher
+- Settings/status screen for API, bootstrap, account, app version, environment, and notifications
 - Push notification opt-in, device-aware diagnostics, and empty-push plus fetched notification test sending
 
 ## Project Structure
@@ -256,27 +256,71 @@ https://YOUR_DEPLOYED_URL/api/bootstrap
 https://YOUR_DEPLOYED_URL/api/notifications/config
 ```
 
-14. Open the deployed app. The access gate should appear before the main app.
+14. Open the deployed app. The login screen should appear when signed out.
 
-15. Enter the configured preview access code.
+15. Sign in as Glenn/Owner. If Glenn has no password yet, use the owner bootstrap API path with `SIDELINE_OWNER_BOOTSTRAP_CODE` once to store a real password hash.
 
-16. Check Settings. It should show API health, bootstrap loaded, access granted, app version `2.0.0-dev`, environment, service worker status, notification permission, this-device status, and selected-persona subscribed devices.
+16. Check Settings. It should show API health, bootstrap loaded, app version `2.0.1-dev`, environment, service worker status, notification permission, this-device status, and account devices.
+
+## Milestone 2.0B Production Auth and Roles
+
+Normal app access is now login-first:
+
+- `/invite/:token` remains public for staff setup.
+- `/login` remains public.
+- Logged-out users opening `/` are sent to `/login`.
+- The old access-code gate remains in the codebase only as fallback/dev scaffolding and no longer blocks normal logged-in app use.
+- Logged-in users do not need an access code.
+
+Roles:
+
+- Owner can access all admin, operational, settings, notification, profile, invite, and testing tools.
+- Admin can access operational admin screens, create invites, edit staff profiles, deactivate/reactivate staff, create locations/events/availability requests, and use existing notification controls.
+- Admin cannot change roles and cannot use owner testing/View As.
+- Staff can access only My Dashboard, My Shifts placeholder, Requests, Messages placeholder, Tasks placeholder, and Upload Photos placeholder.
+- Staff cannot access Staff admin, Locations, Events, Availability admin, Reports, Settings/debug, invite tools, or other users' profile data.
+
+Owner View As:
+
+- Glenn/Owner sees an `Owner Testing` control in the top bar.
+- Owner can view the app as Glenn/Owner, Admin, or Staff without signing out.
+- Admin and Staff never see this control.
+- This uses the existing persona mechanics internally but is owner-only.
+
+API permission model:
+
+- `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`, invite lookup, and invite completion remain public where needed.
+- `GET /api/bootstrap` requires a valid session.
+- Owner/Admin can receive full bootstrap/admin data.
+- Staff bootstrap and availability APIs are filtered to the signed-in staff user.
+- Staff management, invites, locations, events, availability-request creation, and activity APIs require Owner/Admin.
+- Role changes require Owner.
+- Staff availability responses can only be submitted by that same staff user unless an Owner/Admin is signed in.
+- Unauthorized requests return JSON `401` or `403`.
+
+Owner bootstrap setup:
+
+- Existing seeded Glenn may not have a password yet.
+- If Glenn has no password hash, `POST /api/auth/login` can set the first password only when the request includes a separate `bootstrap_code` matching `SIDELINE_OWNER_BOOTSTRAP_CODE`.
+- The submitted `password` becomes Glenn's real stored password hash.
+- No hardcoded bootstrap fallback is accepted.
+- Once the password hash exists, the bootstrap code is ignored and normal password verification is required.
+- Do not expose `SIDELINE_OWNER_BOOTSTRAP_CODE` in UI, logs, or source control.
 
 ## Milestone 2.0A Account Foundation
 
-Real authentication now exists in parallel with the temporary preview access gate and persona switcher. The old gate/persona system is intentionally still present so preview testing cannot lock the project out.
+Milestone 2.0A added the account foundation. Milestone 2.0B made login the normal app gate and limited persona-style testing to Owner only.
 
 Account workflow:
 
-1. Unlock the preview app with the access gate.
-2. Use the Glenn/Owner persona.
-3. Open Staff.
-4. Create a staff invite link.
-5. Open `/invite/:token` directly. Invite setup does not require the preview access gate.
-6. Staff enters name, required phone, required email, password, emergency contact, availability notes, and initial location availability.
-7. The invite is marked used and cannot be completed again.
-8. Staff signs in at `/login` using phone or email plus password.
-9. Staff lands on My Dashboard with large tiles only: My Schedule, Availability Requests, Messages, and Tasks.
+1. Sign in as Glenn/Owner.
+2. Open Staff.
+3. Create a staff invite link.
+4. Open `/invite/:token` directly. Invite setup does not require login.
+5. Staff enters name, required phone, required email, password, emergency contact, availability notes, and initial location availability.
+6. The invite is marked used and cannot be completed again.
+7. Staff signs in at `/login` using phone or email plus password.
+8. Staff lands on My Dashboard with large tiles only: My Schedule, Availability Requests, Messages, and Tasks.
 
 Security shape:
 
@@ -285,7 +329,7 @@ Security shape:
 - Passwords use Workers-compatible Web Crypto PBKDF2-SHA-256 with per-user random salt.
 - Session cookies are HttpOnly and store only a random token client-side; D1 stores only the session token hash.
 - Deactivated users cannot log in.
-- This is early auth. Full production removal of the access gate/persona switcher is intentionally deferred.
+- The access-code gate is retained only as fallback/dev code. Normal app access uses real login.
 
 Roles:
 
@@ -340,21 +384,11 @@ npm run db:migrate:remote
 
 Apply remote migrations deliberately. Do not run local reset workflows against production.
 
-## Preview Access Gate
+## Access Gate Status
 
-The access gate is a temporary preview gate, not real staff authentication.
+The old access-code gate is retained only as fallback/dev scaffolding. Normal app access is now handled by `/login` and the HttpOnly session cookie.
 
-Behavior:
-
-- First load shows an access-code screen.
-- The client submits the entered code to `POST /api/access/verify`.
-- The Pages Function compares it to `SIDELINE_ACCESS_CODE`.
-- If `SIDELINE_ACCESS_CODE` is missing, the server accepts the local development code `sideline-dev`.
-- The browser stores only `sideline_access_granted=true` and `sideline_access_granted_at`.
-- The entered access code is not stored in localStorage.
-- Settings has a Lock app button that clears preview access and returns to the gate.
-
-For Cloudflare Pages, set `SIDELINE_ACCESS_CODE` separately for both Preview and Production environments, then redeploy.
+`POST /api/access/verify` still exists, but the React app no longer shows the access gate in the normal flow. If Glenn has no stored password yet, the first owner bootstrap login requires `SIDELINE_OWNER_BOOTSTRAP_CODE`.
 
 ## Push Notification Opt-In and Test Send
 
@@ -389,8 +423,8 @@ If `VAPID_PRIVATE_KEY` or `VAPID_SUBJECT` is missing, `POST /api/notifications/t
 Settings separates:
 
 - This device: local device label/id, notification permission, service worker status, and this browser/PWA push subscription.
-- Selected persona devices: active/inactive subscriptions stored for the current demo persona.
-- Test push: send fetched, empty, or payload pushes to the current device only, or all active devices for the selected persona.
+- Account/viewed-user devices: active/inactive subscriptions stored for the current signed-in user or the owner-selected View As user.
+- Test push: send fetched, empty, or payload pushes to the current device only, or all active devices for the selected user.
 
 Fetched vs empty vs payload push:
 
@@ -399,7 +433,7 @@ Fetched vs empty vs payload push:
 - Payload push sends the encrypted JSON test payload using Web Push `aes128gcm` message encryption. Payload push is currently unreliable and remains diagnostic only.
 - Safe debug results include endpoint host, VAPID audience, HTTP status, send mode, success/failure, and whether a subscription was marked inactive. Full endpoints, push keys, auth secrets, and private keys are never returned.
 
-Temporary security note: `/api/notifications/pending` uses the push subscription endpoint as a lookup token because the service worker does not have the preview access gate session. This is acceptable for the current non-sensitive preview test content only. Do not use this path for sensitive notification content until real authentication or device-scoped tokens exist.
+Temporary security note: `/api/notifications/pending` uses the push subscription endpoint as a lookup token because service worker push events do not carry the app session cookie in a normal page request. This is acceptable for the current non-sensitive preview test content only. Do not use this path for sensitive notification content until device-scoped tokens exist.
 
 Generate VAPID keys locally with a one-time command:
 
@@ -414,13 +448,13 @@ iPhone test-send flow:
 1. Open the deployed URL in Safari.
 2. Add Sideline Ops to the Home Screen.
 3. Open Sideline from the Home Screen icon.
-4. Unlock the access gate.
-5. Select the intended demo persona.
+4. Sign in.
+5. If signed in as Owner, choose the intended View As user.
 6. Go to Settings.
 7. Enable notifications.
-8. Confirm the iPhone appears under the selected persona's subscribed devices.
+8. Confirm the iPhone appears under the selected user's subscribed devices.
 9. Tap Show local test notification on the phone.
-10. From desktop, open the same deployed app and select the same persona.
+10. From desktop, open the same deployed app and sign in as the same user, or use Owner View As.
 11. In Settings, send a fetched notification to the iPhone/current device if testing on the phone, or all devices for that user if testing from desktop.
 12. Put the phone on the Home Screen or lock it, then send a fetched notification from desktop to the phone/all devices.
 13. Use empty push only as a delivery diagnostic and payload push only as an encrypted-payload diagnostic.
@@ -446,14 +480,14 @@ Notification troubleshooting:
 - If Settings says `Push config missing`, set `VAPID_PUBLIC_KEY` and redeploy.
 - If test send says VAPID server configuration is missing, set `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT`, then redeploy.
 - If desktop is subscribed but phone is not, subscribe again from the iPhone Home Screen PWA.
-- If the iPhone is subscribed under a different persona, switch to that persona or resubscribe with the intended persona selected.
+- If the iPhone is subscribed under a different user, switch Owner View As to that user or resubscribe with the intended user selected.
 - If a subscription is inactive or expired, subscribe again from Settings. The test-send endpoint marks 404/410 push-service responses inactive.
 - If local notification works but empty server push does not, check VAPID env vars, audience, deployment, subscription targeting, and push-service delivery.
 - If empty push works but fetched notification does not, check pending deliveries, endpoint matching, and service worker fetch access.
 - If empty push works but payload push does not, check Web Push `aes128gcm` encryption and subscription keys.
 - If local notification fails, check permission, PWA install mode, Focus/Do Not Disturb, and service worker status.
 - Redeploy after changing any Cloudflare Pages environment variables.
-- This still uses the demo persona switcher and preview access gate, not real authentication.
+- Notification settings now use the signed-in account or owner-only View As user.
 
 ## Deployment Smoke Tests
 
@@ -468,65 +502,60 @@ https://YOUR_DEPLOYED_URL/api/notifications/config
 Then test the app UI:
 
 1. Open the deployed URL.
-2. Confirm the access gate appears.
-3. Enter a wrong code and confirm it is rejected.
-4. Enter the configured preview access code.
-5. Use `Glenn / Owner`.
-6. Open Staff and create a test invite link.
-7. Open the invite link in a fresh tab and confirm it bypasses the access gate.
-8. Submit the invite form with missing required fields and confirm validation.
-9. Complete the invite with phone, email, password, emergency contact, availability notes, and location choices.
-10. Open the invite link again and confirm reuse is rejected.
-11. Sign in at `/login` with the new staff email and password.
-12. Sign out, then sign in with the new staff phone and password.
-13. Confirm Staff My Dashboard shows only tiles and no schedule details.
-14. Unlock preview mode again, use `Glenn / Owner`, and edit the staff profile.
-15. Use the Admin persona and confirm role changes are rejected.
-16. Deactivate the staff account and confirm login is rejected.
-17. Reactivate the staff account.
-18. Create or choose an event.
-19. Create an availability request targeted to the test staff member and Ava.
-20. Switch the persona to `Staff`.
-21. Open Requests.
-22. Respond Yes, No, or Maybe.
-23. Switch back to `Glenn / Owner`.
-24. Open Availability.
-25. Confirm Yes/No/Maybe/No response counts only include targeted staff.
-26. Open Settings and confirm API status, access status, app version, environment, service worker status, and push config status.
-16. If `VAPID_PUBLIC_KEY` is configured, click Enable notifications and confirm subscription status changes to subscribed.
-17. Confirm the current browser appears in Selected persona devices without exposing full endpoints or keys.
-18. Use Show local test notification to confirm the device can display notifications.
-19. If `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` are configured, click fetched notification for current device or all devices and confirm attempted/sent/failed counts and deliveries created.
-20. Use empty and payload buttons only for diagnostics.
-21. Click Disable notifications and confirm subscription status changes to not subscribed.
-22. Click Lock app and confirm the access gate returns.
+2. Confirm `/login` appears when logged out.
+3. Sign in as Glenn/Owner.
+4. Confirm Owner Testing / View As appears.
+5. Open Staff and create a test invite link.
+6. Open the invite link in a fresh tab and confirm it loads without login.
+7. Submit the invite form with missing required fields and confirm validation.
+8. Complete the invite with phone, email, password, emergency contact, availability notes, and location choices.
+9. Open the invite link again and confirm reuse is rejected.
+10. Sign in at `/login` with the new staff email and password.
+11. Sign out, then sign in with the new staff phone and password.
+12. Confirm Staff My Dashboard shows only tiles and no schedule details.
+13. Confirm Staff cannot access admin screens or admin APIs.
+14. Sign in as Owner and edit the staff profile.
+15. Use an Admin account and confirm Owner Testing is hidden.
+16. Confirm Admin role changes are rejected with `403`.
+17. Deactivate the staff account and confirm login is rejected.
+18. Reactivate the staff account.
+19. Create or choose an event.
+20. Create an availability request targeted to the test staff member.
+21. Sign in as that Staff user, open Requests, and respond Yes/No/Maybe.
+22. Sign in as Owner/Admin, open Availability, and confirm counts only include targeted staff.
+23. Open Settings and confirm API status, account status, app version, environment, service worker status, and push config status.
+24. If `VAPID_PUBLIC_KEY` is configured, click Enable notifications and confirm subscription status changes to subscribed.
+25. Confirm the current browser appears in account/viewed-user devices without exposing full endpoints or keys.
+26. Use Show local test notification to confirm the device can display notifications.
+27. If `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` are configured, click fetched notification for current device or all devices and confirm attempted/sent/failed counts and deliveries created.
+28. Use empty and payload buttons only for diagnostics.
+29. Click Disable notifications and confirm subscription status changes to not subscribed.
 
 ## Phone Test Checklist
 
 Use the deployed HTTPS URL for phone testing.
 
 1. Open the deployed URL on iPhone Safari.
-2. Confirm the access gate appears.
-3. Enter the preview access code.
-4. Use the demo persona switcher.
-5. Tap Share, then Add to Home Screen.
-6. Open Sideline from the Home Screen icon.
-7. Confirm it opens in standalone app display and stays unlocked.
-8. Test Staff Requests and the Yes/No/Maybe buttons.
-9. Switch to Glenn/Admin and inspect Dashboard, Staff, Events, Availability, and Settings.
-10. Confirm mobile admin tables display as cards.
-11. Confirm Settings shows API health, access status, environment, and app version.
-12. Confirm Settings shows service worker, notification permission, push config, and subscription status.
-13. If `VAPID_PUBLIC_KEY` is configured, test Enable notifications.
-14. Confirm the phone appears under the selected persona's subscribed devices and is marked current device.
-15. Tap Show local test notification.
-16. If `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` are configured, tap Send fetched notification to this device and confirm the phone receives it.
-17. Optionally test empty push as delivery-only diagnostic and payload push as encrypted-payload diagnostic.
-18. Test Disable notifications.
-19. Tap Lock app in Settings and confirm the gate returns.
-20. On Android Chrome, open the deployed URL.
-21. Use Install app or Add to Home screen.
-22. Open from the icon and repeat the access/staff/admin/push-readiness checks.
+2. Confirm `/login` appears.
+3. Sign in with a real Staff or Owner/Admin account.
+4. Tap Share, then Add to Home Screen.
+5. Open Sideline from the Home Screen icon.
+6. Confirm it opens in standalone app display and stays signed in.
+7. Test Staff Requests and the Yes/No/Maybe buttons.
+8. Sign in as Owner/Admin and inspect Dashboard, Staff, Events, Availability, and Settings.
+9. Confirm mobile admin tables display as cards.
+10. Confirm Settings shows API health, account status, environment, and app version.
+11. Confirm Settings shows service worker, notification permission, push config, and subscription status.
+12. If `VAPID_PUBLIC_KEY` is configured, test Enable notifications.
+13. Confirm the phone appears under the signed-in or Owner View As user's subscribed devices and is marked current device.
+14. Tap Show local test notification.
+15. If `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` are configured, tap Send fetched notification to this device and confirm the phone receives it.
+16. Optionally test empty push as delivery-only diagnostic and payload push as encrypted-payload diagnostic.
+17. Test Disable notifications.
+18. Sign out and confirm `/login` returns.
+19. On Android Chrome, open the deployed URL.
+20. Use Install app or Add to Home screen.
+21. Open from the icon and repeat the login/staff/admin/push-readiness checks.
 
 ## Database Safety
 
@@ -538,9 +567,9 @@ Use the deployed HTTPS URL for phone testing.
 
 ## Notes
 
-Authentication is now implemented as an early parallel foundation. The persona switcher is still temporary scaffolding for UI and workflow testing.
+Authentication is now the normal app gate. Owner-only View As remains as a testing tool for Glenn.
 
-The access gate is also temporary. It prevents casual public access to the deployed preview but does not replace real authentication, authorization, audit controls, or staff login.
+The old access-code gate remains only as fallback/dev scaffolding and is not used in the normal app flow.
 
 Availability requests are targeted through `availability_request_recipients`. Admin response counts and staff request visibility use that table, so "No response" only includes users who were actually targeted.
 
