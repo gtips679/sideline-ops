@@ -1,13 +1,14 @@
 # Sideline Ops
 
-Milestone 1.1.3 preview-gated deployable app for Sideline Supplies, a PWA-style concessions and staffing operations app.
+Milestone 2.0A preview-gated deployable app for Sideline Supplies, a PWA-style concessions and staffing operations app.
 
 This project includes:
 
 - React, TypeScript, and Vite frontend
 - Cloudflare Pages-compatible Functions API under `functions/api`
 - Cloudflare D1 schema and demo seed data under `migrations`
-- Temporary persona switcher for Glenn/Admin, Manager, and Staff
+- Temporary persona switcher for Glenn/Owner, Admin, and Staff
+- Parallel early account foundation with staff invites, password setup, login sessions, and staff profile management
 - Admin create forms for staff, locations, events, and availability requests
 - Targeted availability requests with recipient-aware response counts
 - Basic PWA manifest/icons
@@ -21,6 +22,7 @@ This project includes:
 src/app                     App shell, route state, navigation, global styles
 src/components              Shared presentational components
 src/features/staff          Staff list and staff-facing dashboard screens
+src/features/auth           Login and invite setup screens
 src/features/locations      Location screens
 src/features/events         Admin dashboard and event screens
 src/features/availability   Availability admin and staff request screens
@@ -104,8 +106,16 @@ This only affects local `.wrangler` state. Do not run destructive reset commands
 - `POST /api/access/verify`
 - `GET /api/health`
 - `GET /api/bootstrap`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/me`
+- `GET /api/invites?actor_user_id=...`
+- `POST /api/invites/create`
+- `GET /api/invites/:token`
+- `POST /api/invites/:token/complete`
 - `GET /api/users`
 - `POST /api/users`
+- `PATCH /api/users/:id`
 - `GET /api/locations`
 - `POST /api/locations`
 - `GET /api/events`
@@ -250,7 +260,85 @@ https://YOUR_DEPLOYED_URL/api/notifications/config
 
 15. Enter the configured preview access code.
 
-16. Check Settings. It should show API health, bootstrap loaded, access granted, app version `1.1.3-dev`, environment, service worker status, notification permission, this-device status, and selected-persona subscribed devices.
+16. Check Settings. It should show API health, bootstrap loaded, access granted, app version `2.0.0-dev`, environment, service worker status, notification permission, this-device status, and selected-persona subscribed devices.
+
+## Milestone 2.0A Account Foundation
+
+Real authentication now exists in parallel with the temporary preview access gate and persona switcher. The old gate/persona system is intentionally still present so preview testing cannot lock the project out.
+
+Account workflow:
+
+1. Unlock the preview app with the access gate.
+2. Use the Glenn/Owner persona.
+3. Open Staff.
+4. Create a staff invite link.
+5. Open `/invite/:token` directly. Invite setup does not require the preview access gate.
+6. Staff enters name, required phone, required email, password, emergency contact, availability notes, and initial location availability.
+7. The invite is marked used and cannot be completed again.
+8. Staff signs in at `/login` using phone or email plus password.
+9. Staff lands on My Dashboard with large tiles only: My Schedule, Availability Requests, Messages, and Tasks.
+
+Security shape:
+
+- Invite tokens are generated once and only the SHA-256 token hash is stored in D1.
+- Invites are single-use and expire after roughly one month.
+- Passwords use Workers-compatible Web Crypto PBKDF2-SHA-256 with per-user random salt.
+- Session cookies are HttpOnly and store only a random token client-side; D1 stores only the session token hash.
+- Deactivated users cannot log in.
+- This is early auth. Full production removal of the access gate/persona switcher is intentionally deferred.
+
+Roles:
+
+- Owner can change user roles.
+- Admin can manage staff profile fields but cannot change roles.
+- Staff accounts created through generic invite links always start as Staff.
+- Manager remains a legacy/demo route label only and is not a full role workflow in this milestone.
+
+Admin profile management in Staff includes:
+
+- Name, phone, email, emergency contact, basic availability notes
+- Internal skills checklist
+- Internal notes
+- Location availability
+- Active/deactivated status
+- Owner-only role editing
+
+Staff cannot see or edit internal skills, internal notes, or location availability after setup.
+
+New account tables and fields are in `migrations/0005_accounts_invites_profiles.sql`:
+
+- Expanded `users` profile/password fields and `owner` role support
+- `invites`
+- `sessions`
+- `user_location_availability`
+- `staff_schedule_views`
+- `shift_assignments.first_viewed_at`
+- `shift_assignments.last_viewed_at`
+- `shift_assignments.confirmed_at`
+
+Local account testing:
+
+```bash
+npm run db:migrate:local
+npm run build
+npm run pages:dev
+```
+
+Then open:
+
+```txt
+http://127.0.0.1:8788
+http://127.0.0.1:8788/login
+http://127.0.0.1:8788/invite/YOUR_CREATED_TOKEN
+```
+
+Remote deployment reminder:
+
+```bash
+npm run db:migrate:remote
+```
+
+Apply remote migrations deliberately. Do not run local reset workflows against production.
 
 ## Preview Access Gate
 
@@ -383,17 +471,28 @@ Then test the app UI:
 2. Confirm the access gate appears.
 3. Enter a wrong code and confirm it is rejected.
 4. Enter the configured preview access code.
-5. Use `Glenn / Admin`.
-6. Create a test staff member.
-7. Create or choose an event.
-8. Create an availability request targeted to the test staff member and Ava.
-9. Switch the persona to `Staff`.
-10. Open Requests.
-11. Respond Yes, No, or Maybe.
-12. Switch back to `Glenn / Admin`.
-13. Open Availability.
-14. Confirm Yes/No/Maybe/No response counts only include targeted staff.
-15. Open Settings and confirm API status, access status, app version, environment, service worker status, and push config status.
+5. Use `Glenn / Owner`.
+6. Open Staff and create a test invite link.
+7. Open the invite link in a fresh tab and confirm it bypasses the access gate.
+8. Submit the invite form with missing required fields and confirm validation.
+9. Complete the invite with phone, email, password, emergency contact, availability notes, and location choices.
+10. Open the invite link again and confirm reuse is rejected.
+11. Sign in at `/login` with the new staff email and password.
+12. Sign out, then sign in with the new staff phone and password.
+13. Confirm Staff My Dashboard shows only tiles and no schedule details.
+14. Unlock preview mode again, use `Glenn / Owner`, and edit the staff profile.
+15. Use the Admin persona and confirm role changes are rejected.
+16. Deactivate the staff account and confirm login is rejected.
+17. Reactivate the staff account.
+18. Create or choose an event.
+19. Create an availability request targeted to the test staff member and Ava.
+20. Switch the persona to `Staff`.
+21. Open Requests.
+22. Respond Yes, No, or Maybe.
+23. Switch back to `Glenn / Owner`.
+24. Open Availability.
+25. Confirm Yes/No/Maybe/No response counts only include targeted staff.
+26. Open Settings and confirm API status, access status, app version, environment, service worker status, and push config status.
 16. If `VAPID_PUBLIC_KEY` is configured, click Enable notifications and confirm subscription status changes to subscribed.
 17. Confirm the current browser appears in Selected persona devices without exposing full endpoints or keys.
 18. Use Show local test notification to confirm the device can display notifications.
@@ -439,7 +538,7 @@ Use the deployed HTTPS URL for phone testing.
 
 ## Notes
 
-Authentication is intentionally not implemented yet. The persona switcher is temporary scaffolding for UI and workflow testing.
+Authentication is now implemented as an early parallel foundation. The persona switcher is still temporary scaffolding for UI and workflow testing.
 
 The access gate is also temporary. It prevents casual public access to the deployed preview but does not replace real authentication, authorization, audit controls, or staff login.
 

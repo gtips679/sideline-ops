@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { PlaceholderPanel } from "../components/PlaceholderPanel";
 import { SectionHeader } from "../components/SectionHeader";
-import { getApiHealth, getBootstrap, getPushSubscriptions, sendTestPushNotification } from "../lib/api";
+import { getApiHealth, getAuthMe, getBootstrap, getPushSubscriptions, logout, sendTestPushNotification } from "../lib/api";
 import { getClientDeviceInfo, type ClientDeviceInfo } from "../lib/device";
 import { disableCurrentPush, enablePushForUser, initialPushUiState, inspectPushState, showLocalTestNotification, type PushUiState } from "../lib/push";
 import type { ApiHealth, AvailabilityRequest, BootstrapData, PersonaKey, PushSubscriptionInfo, TestPushSummary, User } from "../lib/types";
 import { AvailabilityScreen } from "../features/availability/AvailabilityScreen";
 import { StaffRequestsScreen } from "../features/availability/StaffRequestsScreen";
+import { InviteSetupScreen } from "../features/auth/InviteSetupScreen";
+import { LoginScreen } from "../features/auth/LoginScreen";
 import { ChecklistsPlaceholder } from "../features/checklists/ChecklistsPlaceholder";
 import { AdminDashboardScreen } from "../features/events/AdminDashboardScreen";
 import { EventsScreen } from "../features/events/EventsScreen";
@@ -26,9 +28,10 @@ const personaUserIds: Record<PersonaKey, string> = {
   staff: "user_ava",
 };
 
-const appVersion = "1.1.3-dev";
+const appVersion = "2.0.0-dev";
 
 export function App() {
+  const [path, setPath] = useState(() => window.location.pathname);
   const [data, setData] = useState<BootstrapData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [health, setHealth] = useState<ApiHealth | null>(null);
@@ -46,16 +49,28 @@ export function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [accessGranted, setAccessGranted] = useState(() => getStoredAccess().granted);
   const [accessGrantedAt, setAccessGrantedAt] = useState<string | null>(() => getStoredAccess().grantedAt);
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [persona, setPersona] = useState<PersonaKey>("admin");
   const [route, setRoute] = useState<AppRoute>("dashboard");
 
   useEffect(() => {
-    if (accessGranted) {
+    getAuthMe()
+      .then((user) => {
+        setAuthUser(user);
+        if (user?.role === "staff") setRoute("my-dashboard");
+      })
+      .catch(() => setAuthUser(null))
+      .finally(() => setAuthChecked(true));
+  }, []);
+
+  useEffect(() => {
+    if (accessGranted || authUser) {
       refreshData();
       refreshHealth();
       refreshPushState();
     }
-  }, [accessGranted]);
+  }, [accessGranted, authUser?.id]);
 
   function grantAccess() {
     const grantedAt = storeAccessGrant();
@@ -72,6 +87,15 @@ export function App() {
     setHealthError(null);
     setRoute("dashboard");
     setPersona("admin");
+  }
+
+  async function signOut() {
+    await logout();
+    setAuthUser(null);
+    setData(null);
+    setRoute("dashboard");
+    window.history.pushState(null, "", "/login");
+    setPath("/login");
   }
 
   async function refreshHealth() {
@@ -113,11 +137,13 @@ export function App() {
   }
 
   const currentUser = useMemo(() => {
+    if (authUser && data) return data.users.find((user) => user.id === authUser.id) ?? authUser;
+    if (authUser) return authUser;
     if (!data) return null;
     return data.users.find((user) => user.id === personaUserIds[persona]) ?? data.users[0] ?? null;
-  }, [data, persona]);
+  }, [authUser, data, persona]);
 
-  const isStaffView = persona === "staff";
+  const isStaffView = authUser ? authUser.role === "staff" : persona === "staff";
   const nav = isStaffView ? staffNav : adminNav;
 
   useEffect(() => {
@@ -201,7 +227,24 @@ export function App() {
     }
   }
 
-  if (!accessGranted) {
+  if (path.startsWith("/invite/")) {
+    return <InviteSetupScreen token={decodeURIComponent(path.replace("/invite/", ""))} onComplete={() => setPath("/login")} />;
+  }
+
+  if (path === "/login") {
+    return <LoginScreen onLoggedIn={(user) => {
+      setAuthUser(user);
+      window.history.pushState(null, "", "/");
+      setPath("/");
+      setRoute(user.role === "staff" ? "my-dashboard" : "dashboard");
+    }} />;
+  }
+
+  if (!authChecked) {
+    return <LoadingState />;
+  }
+
+  if (!accessGranted && !authUser) {
     return <AccessGate onAccessGranted={grantAccess} />;
   }
 
@@ -231,18 +274,27 @@ export function App() {
             <strong>{currentUser ? `${currentUser.display_name} / ${currentUser.role}` : "Loading"}</strong>
           </div>
           <label className="persona-switcher">
-            <span>Persona</span>
-            <select value={persona} onChange={(event) => setPersona(event.target.value as PersonaKey)}>
-              <option value="admin">Glenn / Admin</option>
-              <option value="manager">Manager</option>
-              <option value="staff">Staff</option>
-            </select>
+            {authUser ? (
+              <>
+                <span>Signed in</span>
+                <button className="secondary-button compact-button" onClick={signOut} type="button">Sign out</button>
+              </>
+            ) : (
+              <>
+                <span>Persona</span>
+                <select value={persona} onChange={(event) => setPersona(event.target.value as PersonaKey)}>
+                  <option value="admin">Glenn / Owner</option>
+                  <option value="manager">Admin</option>
+                  <option value="staff">Staff</option>
+                </select>
+              </>
+            )}
           </label>
         </header>
         <main className="content">
           {loadError ? <div className="notice error">{loadError}</div> : null}
           {refreshing && data ? <div className="notice info">Refreshing data...</div> : null}
-          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData, health, healthError, accessGrantedAt, lockApp, pushState, pushBusy, enableNotifications, disableNotifications, deviceInfo, subscriptions, subscriptionsError, testPushBusy, testPushResult, testPushError, sendTestNotification, localNotificationMessage, localNotificationError, showLocalNotification) : <LoadingState />}
+          {data && currentUser ? renderRoute(route, data, currentUser, updateAvailabilityRequest, refreshData, health, healthError, accessGrantedAt, lockApp, pushState, pushBusy, enableNotifications, disableNotifications, deviceInfo, subscriptions, subscriptionsError, testPushBusy, testPushResult, testPushError, sendTestNotification, localNotificationMessage, localNotificationError, showLocalNotification, setRoute) : <LoadingState />}
         </main>
         <nav className="mobile-nav" aria-label="Mobile primary">
           {nav.map((item) => {
@@ -283,13 +335,14 @@ function renderRoute(
   sendTestNotification: (target: "current-device" | "all-user-devices", mode: "empty" | "payload" | "fetch") => Promise<void>,
   localNotificationMessage: string | null,
   localNotificationError: string | null,
-  showLocalNotification: () => Promise<void>
+  showLocalNotification: () => Promise<void>,
+  setRoute: (route: AppRoute) => void
 ) {
   switch (route) {
     case "dashboard":
       return <AdminDashboardScreen events={data.events} requests={data.availabilityRequests} users={data.users} activity={data.activity} />;
     case "staff":
-      return <StaffListScreen users={data.users} currentUser={currentUser} onRefresh={refreshData} />;
+      return <StaffListScreen users={data.users} locations={data.locations} currentUser={currentUser} onRefresh={refreshData} />;
     case "locations":
       return <LocationsScreen locations={data.locations} currentUser={currentUser} onRefresh={refreshData} />;
     case "events":
@@ -345,7 +398,7 @@ function renderRoute(
         />
       );
     case "my-dashboard":
-      return <MyDashboardScreen currentUser={currentUser} events={data.events} requests={data.availabilityRequests} />;
+      return <MyDashboardScreen currentUser={currentUser} events={data.events} requests={data.availabilityRequests} onNavigate={setRoute} />;
     case "my-shifts":
       return (
         <>

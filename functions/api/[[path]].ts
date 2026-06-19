@@ -51,6 +51,37 @@ type NotificationDelivery = {
   error: string | null;
   metadata_json: string | null;
 };
+type DbUser = {
+  id: string;
+  display_name: string;
+  phone: string | null;
+  email: string | null;
+  role: string;
+  is_active: number;
+  first_name?: string | null;
+  last_name?: string | null;
+  emergency_contact_name?: string | null;
+  emergency_contact_phone?: string | null;
+  availability_notes?: string | null;
+  skills_json?: string | null;
+  internal_notes?: string | null;
+  password_hash?: string | null;
+  password_salt?: string | null;
+  password_iterations?: number | null;
+  password_algorithm?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+type DbInvite = {
+  id: string;
+  role: string;
+  status: string;
+  expires_at: string;
+  used_at: string | null;
+  created_at: string;
+  updated_at: string;
+  accepted_by_user_id: string | null;
+};
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
@@ -92,8 +123,17 @@ async function route(context: ApiContext, method: string, path: string): Promise
 
   if (method === "GET" && path === "health") return getHealth();
   if (method === "GET" && path === "bootstrap") return getBootstrap(context.env.SIDELINE_DB);
+  if (method === "POST" && path === "auth/login") return login(context);
+  if (method === "POST" && path === "auth/logout") return logout(context);
+  if (method === "GET" && path === "auth/me") return getAuthMe(context);
+  if (method === "POST" && path === "invites/create") return createInvite(context);
+  if (method === "GET" && path === "invites") return listInvites(context);
+  if (method === "GET" && path.startsWith("invites/")) return getInvite(context, path.split("/")[1] ?? "");
+  if (method === "POST" && path.startsWith("invites/") && path.endsWith("/complete")) return completeInvite(context, path.split("/")[1] ?? "");
   if (method === "GET" && path === "users") return listUsers(context.env.SIDELINE_DB);
   if (method === "POST" && path === "users") return createUser(context);
+  if (method === "PATCH" && path.startsWith("users/")) return updateUserProfile(context, path.split("/")[1] ?? "");
+  if (method === "POST" && path.startsWith("users/") && path.endsWith("/resend-invite")) return createInvite(context, path.split("/")[1] ?? "");
   if (method === "GET" && path === "locations") return listLocations(context.env.SIDELINE_DB);
   if (method === "POST" && path === "locations") return createLocation(context);
   if (method === "GET" && path === "events") return listEvents(context.env.SIDELINE_DB);
@@ -131,6 +171,179 @@ async function verifyAccess(context: ApiContext): Promise<Response> {
   }
 
   return json({ ok: false, error: "Invalid access code" }, 401);
+}
+
+async function login(context: ApiContext): Promise<Response> {
+  const body = await readBody(context.request);
+  const identifier = requireString(body.identifier, "identifier").toLowerCase();
+  const password = requireString(body.password, "password");
+  const user = await context.env.SIDELINE_DB.prepare(
+    `SELECT * FROM users
+     WHERE lower(email) = ? OR phone = ?
+     LIMIT 1`
+  )
+    .bind(identifier, identifier)
+    .first<DbUser>();
+
+  if (!user || !user.is_active) {
+    return json({ error: "Invalid login or inactive account." }, 401);
+  }
+
+  if (!user.password_hash || !user.password_salt || !user.password_iterations) {
+    return json({ error: "This account does not have a password set yet. Use an invite or ask an owner/admin for help." }, 401);
+  }
+
+  const passwordOk = await verifyPassword(password, user);
+  if (!passwordOk) {
+    return json({ error: "Invalid login or inactive account." }, 401);
+  }
+
+  const token = randomToken();
+  const sessionId = crypto.randomUUID();
+  const expiresAt = dateAfterDays(90);
+  await context.env.SIDELINE_DB.prepare(
+    `INSERT INTO sessions (id, user_id, token_hash, expires_at, user_agent, created_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+  )
+    .bind(sessionId, user.id, await hashToken(token), expiresAt, context.request.headers.get("user-agent"))
+    .run();
+
+  return json({ ok: true, user: safeUser(user) }, 200, {
+    "set-cookie": sessionCookie(token, expiresAt, new URL(context.request.url).protocol === "https:"),
+  });
+}
+
+async function logout(context: ApiContext): Promise<Response> {
+  const token = getCookie(context.request, "sideline_session");
+  if (token) {
+    await context.env.SIDELINE_DB.prepare("UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ?")
+      .bind(await hashToken(token))
+      .run();
+  }
+  return json({ ok: true }, 200, {
+    "set-cookie": "sideline_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+  });
+}
+
+async function getAuthMe(context: ApiContext): Promise<Response> {
+  const user = await getCurrentSessionUser(context);
+  return json({ user: user ? safeUser(user) : null });
+}
+
+async function listInvites(context: ApiContext): Promise<Response> {
+  const actor = await requireAdminActor(context);
+  const result = await context.env.SIDELINE_DB.prepare(
+    `SELECT invites.id, invites.role, invites.status, invites.expires_at, invites.used_at, invites.created_at, invites.updated_at,
+            invites.accepted_by_user_id, users.display_name AS accepted_by_display_name
+     FROM invites
+     LEFT JOIN users ON users.id = invites.accepted_by_user_id
+     ORDER BY invites.created_at DESC
+     LIMIT 50`
+  ).all();
+  await expireOldInvites(context.env.SIDELINE_DB);
+  return json({ actor: safeUser(actor), invites: result.results });
+}
+
+async function createInvite(context: ApiContext, targetUserId?: string): Promise<Response> {
+  const actor = await requireAdminActor(context);
+  const token = randomToken();
+  const inviteId = crypto.randomUUID();
+  const expiresAt = dateAfterDays(31);
+
+  await context.env.SIDELINE_DB.prepare(
+    `INSERT INTO invites (id, token_hash, role, created_by_user_id, status, expires_at, created_at, updated_at)
+     VALUES (?, ?, 'staff', ?, 'pending', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+  )
+    .bind(inviteId, await hashToken(token), actor.id, expiresAt)
+    .run();
+
+  if (targetUserId) {
+    await logActivity(context.env.SIDELINE_DB, actor.id, "user", targetUserId, "invite_regenerated", "A new setup invite was generated.");
+  } else {
+    await logActivity(context.env.SIDELINE_DB, actor.id, "invite", inviteId, "created", "A staff setup invite was created.");
+  }
+
+  return json({
+    invite: {
+      id: inviteId,
+      token,
+      invite_url: `${new URL(context.request.url).origin}/invite/${token}`,
+      role: "staff",
+      status: "pending",
+      expires_at: expiresAt,
+    },
+  }, 201);
+}
+
+async function getInvite(context: ApiContext, token: string): Promise<Response> {
+  const invite = await getPendingInviteByToken(context.env.SIDELINE_DB, token);
+  if (!invite) return json({ error: "Invite not found, already used, or expired." }, 404);
+  const locations = await getLocations(context.env.SIDELINE_DB);
+  return json({ invite: safeInvite(invite), locations: locations.filter((location) => Number((location as { is_active?: number }).is_active ?? 0) === 1) });
+}
+
+async function completeInvite(context: ApiContext, token: string): Promise<Response> {
+  const invite = await getPendingInviteByToken(context.env.SIDELINE_DB, token);
+  if (!invite) return json({ error: "Invite not found, already used, or expired." }, 404);
+
+  const body = await readBody(context.request);
+  const firstName = requireString(body.first_name, "first_name");
+  const lastName = requireString(body.last_name, "last_name");
+  const phone = requireString(body.phone, "phone");
+  const email = requireString(body.email, "email").toLowerCase();
+  const password = requireString(body.password, "password");
+  const confirmPassword = requireString(body.confirm_password, "confirm_password");
+  const emergencyContactName = stringValue(body.emergency_contact_name);
+  const emergencyContactPhone = stringValue(body.emergency_contact_phone);
+  const availabilityNotes = stringValue(body.availability_notes);
+
+  if (password !== confirmPassword) throw new Error("Passwords do not match");
+  if (password.length < 8) throw new Error("Password must be at least 8 characters");
+
+  const existing = await context.env.SIDELINE_DB.prepare("SELECT id FROM users WHERE lower(email) = ? OR phone = ? LIMIT 1")
+    .bind(email, phone)
+    .first<{ id: string }>();
+  if (existing) throw new Error("A user with that email or phone already exists");
+
+  const passwordRecord = await hashPassword(password);
+  const userId = crypto.randomUUID();
+  const displayName = `${firstName} ${lastName}`.trim();
+
+  await context.env.SIDELINE_DB.prepare(
+    `INSERT INTO users (
+      id, display_name, first_name, last_name, phone, email, role, is_active,
+      emergency_contact_name, emergency_contact_phone, availability_notes,
+      password_hash, password_salt, password_iterations, password_algorithm, password_updated_at,
+      created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, 'staff', 1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+  )
+    .bind(
+      userId,
+      displayName,
+      firstName,
+      lastName,
+      phone,
+      email,
+      emergencyContactName,
+      emergencyContactPhone,
+      availabilityNotes,
+      passwordRecord.hash,
+      passwordRecord.salt,
+      passwordRecord.iterations,
+      passwordRecord.algorithm
+    )
+    .run();
+
+  await saveLocationAvailability(context.env.SIDELINE_DB, userId, body.location_availability);
+  await context.env.SIDELINE_DB.prepare(
+    "UPDATE invites SET status = 'used', accepted_by_user_id = ?, used_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+  )
+    .bind(userId, invite.id)
+    .run();
+  await logActivity(context.env.SIDELINE_DB, userId, "invite", invite.id, "completed", `${displayName} completed staff setup.`);
+
+  return json({ ok: true, user: safeUser(await getUserById(context.env.SIDELINE_DB, userId)) }, 201);
 }
 
 async function subscribeToNotifications(context: ApiContext): Promise<Response> {
@@ -656,6 +869,60 @@ async function createUser(context: ApiContext): Promise<Response> {
   return json({ user: await getById(context.env.SIDELINE_DB, "users", id) }, 201);
 }
 
+async function updateUserProfile(context: ApiContext, userId: string): Promise<Response> {
+  if (!userId) throw new Error("Missing user id");
+  const actor = await requireAdminActor(context);
+  const body = await readBody(context.request);
+  const existing = await getUserById(context.env.SIDELINE_DB, userId);
+  if (!existing) return json({ error: "User not found" }, 404);
+
+  const role = stringValue(body.role);
+  if (role && role !== effectiveRole(existing)) {
+    if (effectiveRole(actor) !== "owner") return json({ error: "Only an owner can change roles." }, 403);
+    if (!["owner", "admin", "manager", "staff"].includes(role)) throw new Error("Invalid role");
+    if (role === "owner" && userId !== "user_glenn") return json({ error: "Owner role is reserved for Glenn in this early auth milestone." }, 400);
+  }
+  const dbRole = role === "owner" ? "admin" : role;
+
+  const firstName = stringValue(body.first_name) ?? existing.first_name ?? "";
+  const lastName = stringValue(body.last_name) ?? existing.last_name ?? "";
+  const displayName = stringValue(body.display_name) || `${firstName} ${lastName}`.trim() || existing.display_name;
+  const skills = Array.isArray(body.skills)
+    ? body.skills.filter((skill): skill is string => typeof skill === "string" && skill.trim().length > 0).map((skill) => skill.trim())
+    : parseSkills(existing.skills_json);
+
+  await context.env.SIDELINE_DB.prepare(
+    `UPDATE users
+     SET display_name = ?, first_name = ?, last_name = ?, phone = ?, email = ?, role = ?, is_active = ?,
+         emergency_contact_name = ?, emergency_contact_phone = ?, availability_notes = ?,
+         skills_json = ?, internal_notes = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  )
+    .bind(
+      displayName,
+      firstName || null,
+      lastName || null,
+      stringValue(body.phone) ?? existing.phone,
+      stringValue(body.email) ?? existing.email,
+      dbRole || existing.role,
+      boolToInt(body.is_active, Boolean(existing.is_active)),
+      stringValue(body.emergency_contact_name) ?? existing.emergency_contact_name ?? null,
+      stringValue(body.emergency_contact_phone) ?? existing.emergency_contact_phone ?? null,
+      stringValue(body.availability_notes) ?? existing.availability_notes ?? null,
+      JSON.stringify(skills),
+      stringValue(body.internal_notes) ?? existing.internal_notes ?? null,
+      userId
+    )
+    .run();
+
+  if (Array.isArray(body.location_availability)) {
+    await saveLocationAvailability(context.env.SIDELINE_DB, userId, body.location_availability);
+  }
+
+  await logActivity(context.env.SIDELINE_DB, actor.id, "user", userId, "updated", `${displayName} was updated.`);
+  return json({ user: safeUser(await getUserById(context.env.SIDELINE_DB, userId)) });
+}
+
 async function listLocations(db: D1Database): Promise<Response> {
   return json({ locations: await getLocations(db) });
 }
@@ -808,8 +1075,27 @@ async function listActivity(db: D1Database): Promise<Response> {
 }
 
 async function getUsers(db: D1Database) {
-  const result = await db.prepare("SELECT * FROM users ORDER BY role, display_name").all();
-  return result.results;
+  const result = await db.prepare(
+    `SELECT id, display_name, phone, email, role, is_active, first_name, last_name,
+            emergency_contact_name, emergency_contact_phone, availability_notes,
+            skills_json, internal_notes, created_at, updated_at
+     FROM users
+     ORDER BY role, display_name`
+  ).all<DbUser>();
+  const availability = await db.prepare(
+    `SELECT user_location_availability.*, locations.name AS location_name
+     FROM user_location_availability
+     JOIN locations ON locations.id = user_location_availability.location_id
+     ORDER BY locations.name`
+  ).all<Record<string, unknown> & { user_id: string }>();
+  return result.results.map((user) => ({
+    ...safeUser(user),
+    location_availability: availability.results.filter((item) => item.user_id === user.id),
+  }));
+}
+
+async function getUserById(db: D1Database, id: string): Promise<DbUser | null> {
+  return db.prepare("SELECT * FROM users WHERE id = ? LIMIT 1").bind(id).first<DbUser>();
 }
 
 async function getLocations(db: D1Database) {
@@ -909,6 +1195,196 @@ async function logActivity(
     .run();
 }
 
+async function requireAdminActor(context: ApiContext): Promise<DbUser> {
+  const sessionUser = await getCurrentSessionUser(context);
+  const body = mutableMethods.has(context.request.method.toUpperCase()) ? await context.request.clone().json().catch(() => null) : null;
+  const url = new URL(context.request.url);
+  const actorId = body && typeof body === "object" && !Array.isArray(body) && typeof (body as { actor_user_id?: unknown }).actor_user_id === "string"
+    ? (body as { actor_user_id: string }).actor_user_id
+    : url.searchParams.get("actor_user_id");
+  const actor = sessionUser ?? (actorId ? await getUserById(context.env.SIDELINE_DB, actorId) : null);
+  if (!actor || !["owner", "admin"].includes(effectiveRole(actor)) || !actor.is_active) {
+    throw new Error("Missing owner/admin actor");
+  }
+  return actor;
+}
+
+async function getCurrentSessionUser(context: ApiContext): Promise<DbUser | null> {
+  const token = getCookie(context.request, "sideline_session");
+  if (!token) return null;
+  const tokenHash = await hashToken(token);
+  const user = await context.env.SIDELINE_DB.prepare(
+    `SELECT users.*
+     FROM sessions
+     JOIN users ON users.id = sessions.user_id
+     WHERE sessions.token_hash = ?
+       AND sessions.revoked_at IS NULL
+       AND sessions.expires_at > CURRENT_TIMESTAMP
+     LIMIT 1`
+  )
+    .bind(tokenHash)
+    .first<DbUser>();
+  if (user) {
+    await context.env.SIDELINE_DB.prepare("UPDATE sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE token_hash = ?").bind(tokenHash).run();
+  }
+  return user && user.is_active ? user : null;
+}
+
+async function getPendingInviteByToken(db: D1Database, token: string): Promise<DbInvite | null> {
+  if (!token) return null;
+  await expireOldInvites(db);
+  return db.prepare(
+    `SELECT id, role, status, expires_at, used_at, created_at, updated_at, accepted_by_user_id
+     FROM invites
+     WHERE token_hash = ? AND status = 'pending' AND expires_at > CURRENT_TIMESTAMP
+     LIMIT 1`
+  )
+    .bind(await hashToken(token))
+    .first<DbInvite>();
+}
+
+async function expireOldInvites(db: D1Database) {
+  await db.prepare(
+    "UPDATE invites SET status = 'expired', updated_at = CURRENT_TIMESTAMP WHERE status = 'pending' AND expires_at <= CURRENT_TIMESTAMP"
+  ).run();
+}
+
+async function saveLocationAvailability(db: D1Database, userId: string, value: JsonValue | undefined) {
+  if (!Array.isArray(value)) return;
+  const rows = value
+    .map((item) => {
+      const row = objectValue(item);
+      return {
+        locationId: stringValue(row?.location_id),
+        preference: stringValue(row?.preference),
+      };
+    })
+    .filter((item): item is { locationId: string; preference: string } =>
+      Boolean(item.locationId && ["preferred", "willing", "cannot"].includes(item.preference ?? ""))
+    );
+
+  await db.prepare("DELETE FROM user_location_availability WHERE user_id = ?").bind(userId).run();
+  if (rows.length === 0) return;
+  await db.batch(
+    rows.map((row) =>
+      db.prepare(
+        `INSERT INTO user_location_availability (id, user_id, location_id, preference, created_at, updated_at)
+         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
+      ).bind(crypto.randomUUID(), userId, row.locationId, row.preference)
+    )
+  );
+}
+
+function safeUser(user: DbUser | null) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    display_name: user.display_name,
+    first_name: user.first_name ?? null,
+    last_name: user.last_name ?? null,
+    phone: user.phone ?? null,
+    email: user.email ?? null,
+    role: effectiveRole(user),
+    is_active: user.is_active,
+    emergency_contact_name: user.emergency_contact_name ?? null,
+    emergency_contact_phone: user.emergency_contact_phone ?? null,
+    availability_notes: user.availability_notes ?? null,
+    skills: parseSkills(user.skills_json),
+    internal_notes: user.internal_notes ?? null,
+    has_password: Boolean(user.password_hash),
+    created_at: user.created_at,
+    updated_at: user.updated_at,
+  };
+}
+
+function effectiveRole(user: Pick<DbUser, "id" | "role">): string {
+  return user.id === "user_glenn" ? "owner" : user.role;
+}
+
+function safeInvite(invite: DbInvite) {
+  return {
+    id: invite.id,
+    role: invite.role,
+    status: invite.status,
+    expires_at: invite.expires_at,
+    used_at: invite.used_at,
+    created_at: invite.created_at,
+  };
+}
+
+function parseSkills(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+async function hashPassword(password: string) {
+  const saltBytes = crypto.getRandomValues(new Uint8Array(16));
+  const salt = bytesToBase64Url(saltBytes);
+  const iterations = 210000;
+  const keyMaterial = await crypto.subtle.importKey("raw", utf8(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: saltBytes, iterations, hash: "SHA-256" }, keyMaterial, 256);
+  return {
+    hash: bytesToBase64Url(new Uint8Array(bits)),
+    salt,
+    iterations,
+    algorithm: "PBKDF2-SHA-256",
+  };
+}
+
+async function verifyPassword(password: string, user: DbUser): Promise<boolean> {
+  if (!user.password_hash || !user.password_salt || !user.password_iterations) return false;
+  const saltBytes = base64UrlToBytes(user.password_salt);
+  const keyMaterial = await crypto.subtle.importKey("raw", utf8(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: saltBytes, iterations: user.password_iterations, hash: "SHA-256" },
+    keyMaterial,
+    256
+  );
+  return timingSafeEqual(bytesToBase64Url(new Uint8Array(bits)), user.password_hash);
+}
+
+async function hashToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", utf8(token));
+  return bytesToBase64Url(new Uint8Array(digest));
+}
+
+function randomToken(): string {
+  return bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+function dateAfterDays(days: number): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString();
+}
+
+function sessionCookie(token: string, expiresAt: string, secure: boolean): string {
+  const parts = [`sideline_session=${token}`, "Path=/", "HttpOnly", "SameSite=Lax", `Expires=${new Date(expiresAt).toUTCString()}`];
+  if (secure) parts.push("Secure");
+  return parts.join("; ");
+}
+
+function getCookie(request: Request, name: string): string | null {
+  const cookie = request.headers.get("cookie");
+  if (!cookie) return null;
+  const part = cookie.split(";").map((item) => item.trim()).find((item) => item.startsWith(`${name}=`));
+  return part ? decodeURIComponent(part.slice(name.length + 1)) : null;
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    result |= a.charCodeAt(index) ^ b.charCodeAt(index);
+  }
+  return result === 0;
+}
+
 async function readBody(request: Request): Promise<Record<string, JsonValue | undefined>> {
   if (!mutableMethods.has(request.method.toUpperCase())) return {};
   const body = await request.json().catch(() => null);
@@ -1003,10 +1479,13 @@ async function resolveRecipientUserIds(db: D1Database, body: Record<string, Json
   return selectedIds.filter((id) => activeStaffIds.has(id));
 }
 
-function json(payload: unknown, status = 200): Response {
+function json(payload: unknown, status = 200, headers: HeadersInit = {}): Response {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: jsonHeaders,
+    headers: {
+      ...jsonHeaders,
+      ...headers,
+    },
   });
 }
 
@@ -1014,7 +1493,7 @@ function corsHeaders(): HeadersInit {
   return {
     ...jsonHeaders,
     "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
     "access-control-allow-headers": "content-type",
   };
 }

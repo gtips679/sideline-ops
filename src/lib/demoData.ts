@@ -4,8 +4,8 @@ const now = "2026-06-17T14:00:00Z";
 
 export const demoData: BootstrapData = {
   users: [
-    { id: "user_glenn", display_name: "Glenn", phone: "555-0100", email: "glenn@sidelinesupplies.example", role: "admin", is_active: 1, created_at: now, updated_at: now },
-    { id: "user_manager", display_name: "Morgan Reed", phone: "555-0101", email: "morgan@sidelinesupplies.example", role: "manager", is_active: 1, created_at: now, updated_at: now },
+    { id: "user_glenn", display_name: "Glenn", phone: "555-0100", email: "glenn@sidelinesupplies.example", role: "owner", is_active: 1, created_at: now, updated_at: now },
+    { id: "user_manager", display_name: "Morgan Reed", phone: "555-0101", email: "morgan@sidelinesupplies.example", role: "admin", is_active: 1, created_at: now, updated_at: now },
     { id: "user_ava", display_name: "Ava Johnson", phone: "555-0102", email: "ava@sidelinesupplies.example", role: "staff", is_active: 1, created_at: now, updated_at: now },
     { id: "user_ben", display_name: "Ben Carter", phone: "555-0103", email: "ben@sidelinesupplies.example", role: "staff", is_active: 1, created_at: now, updated_at: now },
     { id: "user_carmen", display_name: "Carmen Diaz", phone: "555-0104", email: "carmen@sidelinesupplies.example", role: "staff", is_active: 1, created_at: now, updated_at: now },

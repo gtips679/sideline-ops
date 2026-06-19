@@ -1,16 +1,56 @@
-export type UserRole = "admin" | "manager" | "staff";
+export type UserRole = "owner" | "admin" | "manager" | "staff";
 export type PersonaKey = "admin" | "manager" | "staff";
 export type AvailabilityResponseValue = "yes" | "no" | "maybe";
 
 export type User = {
   id: string;
   display_name: string;
+  first_name?: string | null;
+  last_name?: string | null;
   phone: string | null;
   email: string | null;
   role: UserRole;
   is_active: number;
+  emergency_contact_name?: string | null;
+  emergency_contact_phone?: string | null;
+  availability_notes?: string | null;
+  skills?: string[];
+  internal_notes?: string | null;
+  has_password?: boolean;
+  location_availability?: UserLocationAvailability[];
   created_at: string;
   updated_at: string;
+};
+
+export type UserLocationAvailability = {
+  id: string;
+  user_id: string;
+  location_id: string;
+  location_name?: string;
+  preference: "preferred" | "willing" | "cannot";
+  created_at: string;
+  updated_at: string;
+};
+
+export type InviteSummary = {
+  id: string;
+  role: "staff";
+  status: "pending" | "used" | "expired" | "revoked";
+  expires_at: string;
+  used_at: string | null;
+  created_at: string;
+  updated_at?: string;
+  accepted_by_user_id?: string | null;
+  accepted_by_display_name?: string | null;
+};
+
+export type CreatedInvite = InviteSummary & {
+  token: string;
+  invite_url: string;
+};
+
+export type AuthUserResponse = {
+  user: User | null;
 };
 
 export type Location = {

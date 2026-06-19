@@ -1,5 +1,5 @@
 import { demoData } from "./demoData";
-import type { ApiHealth, AvailabilityRequest, AvailabilityResponseValue, BootstrapData, Event, Location, NotificationConfig, PushSubscriptionInfo, PushSubscriptionsResponse, TestPushSummary, User } from "./types";
+import type { ApiHealth, AuthUserResponse, AvailabilityRequest, AvailabilityResponseValue, BootstrapData, CreatedInvite, Event, InviteSummary, Location, NotificationConfig, PushSubscriptionInfo, PushSubscriptionsResponse, TestPushSummary, User } from "./types";
 
 export async function getApiHealth(): Promise<ApiHealth> {
   const response = await fetch("/api/health");
@@ -69,6 +69,58 @@ export async function getBootstrap(): Promise<BootstrapData> {
   } catch {
     return demoData;
   }
+}
+
+export async function getAuthMe(): Promise<User | null> {
+  const response = await fetch("/api/auth/me");
+  if (!response.ok) throw new Error("Could not check login session.");
+  const payload = (await response.json()) as AuthUserResponse;
+  return payload.user;
+}
+
+export async function login(input: { identifier: string; password: string }): Promise<User> {
+  const payload = await postJson<{ ok: true; user: User }>("/api/auth/login", input);
+  return payload.user;
+}
+
+export async function logout(): Promise<void> {
+  await postJson<{ ok: true }>("/api/auth/logout", {});
+}
+
+export async function createInvite(actorUserId: string): Promise<CreatedInvite> {
+  const payload = await postJson<{ invite: CreatedInvite }>("/api/invites/create", { actor_user_id: actorUserId });
+  return payload.invite;
+}
+
+export async function listInvites(actorUserId: string): Promise<InviteSummary[]> {
+  const params = new URLSearchParams({ actor_user_id: actorUserId });
+  const response = await fetch(`/api/invites?${params.toString()}`);
+  if (!response.ok) throw new Error("Could not load invites.");
+  const payload = (await response.json()) as { invites: InviteSummary[] };
+  return payload.invites;
+}
+
+export async function getInvite(token: string): Promise<{ invite: InviteSummary; locations: Location[] }> {
+  const response = await fetch(`/api/invites/${encodeURIComponent(token)}`);
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(payload?.error ?? "Invite is invalid or expired.");
+  return payload as { invite: InviteSummary; locations: Location[] };
+}
+
+export async function completeInvite(token: string, input: unknown): Promise<User> {
+  const payload = await postJson<{ ok: true; user: User }>(`/api/invites/${encodeURIComponent(token)}/complete`, input);
+  return payload.user;
+}
+
+export async function updateUserProfile(userId: string, input: unknown): Promise<User> {
+  const response = await fetch(`/api/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(payload?.error ?? "Could not update user.");
+  return (payload as { user: User }).user;
 }
 
 export async function saveAvailabilityResponse(input: {

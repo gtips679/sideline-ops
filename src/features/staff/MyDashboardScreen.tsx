@@ -1,6 +1,6 @@
-import { MetricCard } from "../../components/MetricCard";
+import { CalendarDays, CheckSquare, Inbox, MessageSquare } from "lucide-react";
+import type { ReactNode } from "react";
 import { SectionHeader } from "../../components/SectionHeader";
-import { formatDateTime } from "../../lib/format";
 import type { AvailabilityRequest, Event, User } from "../../lib/types";
 import { getRequestsForUser } from "../availability/availabilityUtils";
 
@@ -8,32 +8,32 @@ type MyDashboardScreenProps = {
   currentUser: User;
   events: Event[];
   requests: AvailabilityRequest[];
+  onNavigate?: (route: "my-shifts" | "requests" | "messages" | "tasks") => void;
 };
 
-export function MyDashboardScreen({ currentUser, events, requests }: MyDashboardScreenProps) {
+export function MyDashboardScreen({ currentUser, events, requests, onNavigate }: MyDashboardScreenProps) {
   const targetedRequests = getRequestsForUser(requests, currentUser);
   const pendingRequests = targetedRequests.filter((request) => !request.responses.some((response) => response.user_id === currentUser.id));
-  const nextEvent = events[0];
 
   return (
     <>
       <SectionHeader title="My Dashboard" eyebrow={currentUser.display_name} />
-      <div className="metric-grid">
-        <MetricCard label="Pending requests" value={pendingRequests.length} detail="Availability replies needed" />
-        <MetricCard label="Upcoming events" value={events.length} detail="Demo schedule view" />
+      <div className="staff-tile-grid">
+        <Tile label="My Schedule" detail={`${events.length} demo event${events.length === 1 ? "" : "s"}`} icon={<CalendarDays size={26} />} onClick={() => onNavigate?.("my-shifts")} />
+        <Tile label="Availability Requests" detail={`${pendingRequests.length} pending`} icon={<Inbox size={26} />} onClick={() => onNavigate?.("requests")} />
+        <Tile label="Messages" detail="Coming soon" icon={<MessageSquare size={26} />} onClick={() => onNavigate?.("messages")} />
+        <Tile label="Tasks" detail="Coming soon" icon={<CheckSquare size={26} />} onClick={() => onNavigate?.("tasks")} />
       </div>
-      <section className="panel">
-        <h2>Next event</h2>
-        {nextEvent ? (
-          <div className="summary-block">
-            <strong>{nextEvent.title}</strong>
-            <span>{nextEvent.location_name}</span>
-            <small>{formatDateTime(nextEvent.starts_at)}</small>
-          </div>
-        ) : (
-          <p className="muted">No upcoming events.</p>
-        )}
-      </section>
     </>
+  );
+}
+
+function Tile({ label, detail, icon, onClick }: { label: string; detail: string; icon: ReactNode; onClick?: () => void }) {
+  return (
+    <button className="staff-dashboard-tile" onClick={onClick} type="button">
+      {icon}
+      <strong>{label}</strong>
+      <span>{detail}</span>
+    </button>
   );
 }
