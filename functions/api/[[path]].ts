@@ -59,6 +59,7 @@ type DbUser = {
   email: string | null;
   role: string;
   is_active: number;
+  staff_status?: string | null;
   first_name?: string | null;
   last_name?: string | null;
   emergency_contact_name?: string | null;
@@ -135,8 +136,11 @@ async function route(context: ApiContext, method: string, path: string): Promise
   if (method === "POST" && path.startsWith("invites/") && path.endsWith("/complete")) return completeInvite(context, path.split("/")[1] ?? "");
   if (method === "GET" && path === "users") return listUsers(context);
   if (method === "POST" && path === "users") return createUser(context);
+  if (method === "PATCH" && path.startsWith("users/") && path.endsWith("/status")) return updateUserStatus(context, path.split("/")[1] ?? "");
+  if (method === "DELETE" && path.startsWith("users/")) return hardDeleteUser(context, path.split("/")[1] ?? "");
   if (method === "PATCH" && path.startsWith("users/")) return updateUserProfile(context, path.split("/")[1] ?? "");
   if (method === "POST" && path.startsWith("users/") && path.endsWith("/resend-invite")) return createInvite(context, path.split("/")[1] ?? "");
+  if (method === "POST" && path === "invites/cleanup") return cleanupInvites(context);
   if (method === "GET" && path === "locations") return listLocations(context);
   if (method === "POST" && path === "locations") return createLocation(context);
   if (method === "GET" && path === "events") return listEvents(context);
@@ -272,6 +276,27 @@ async function listInvites(context: ApiContext): Promise<Response> {
   ).all();
   await expireOldInvites(context.env.SIDELINE_DB);
   return json({ actor: safeUser(actor), invites: result.results });
+}
+
+async function cleanupInvites(context: ApiContext): Promise<Response> {
+  await requireAdminActor(context);
+  const body = await readBody(context.request);
+  const mode = requireString(body.mode, "mode");
+  const statuses = mode === "used"
+    ? ["used"]
+    : mode === "expired"
+      ? ["expired"]
+      : mode === "inactive"
+        ? ["used", "expired", "revoked"]
+        : null;
+  if (!statuses) throw new Error("Invalid cleanup mode");
+
+  await expireOldInvites(context.env.SIDELINE_DB);
+  const placeholders = statuses.map(() => "?").join(", ");
+  const result = await context.env.SIDELINE_DB.prepare(`DELETE FROM invites WHERE status IN (${placeholders})`)
+    .bind(...statuses)
+    .run();
+  return json({ ok: true, mode, deleted: result.meta.changes ?? 0 });
 }
 
 async function createInvite(context: ApiContext, targetUserId?: string): Promise<Response> {
@@ -967,6 +992,7 @@ async function updateUserProfile(context: ApiContext, userId: string): Promise<R
   await context.env.SIDELINE_DB.prepare(
     `UPDATE users
      SET display_name = ?, first_name = ?, last_name = ?, phone = ?, email = ?, role = ?, is_active = ?,
+         staff_status = ?,
          emergency_contact_name = ?, emergency_contact_phone = ?, availability_notes = ?,
          skills_json = ?, internal_notes = ?, updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`
@@ -979,6 +1005,7 @@ async function updateUserProfile(context: ApiContext, userId: string): Promise<R
       stringValue(body.email) ?? existing.email,
       dbRole || existing.role,
       boolToInt(body.is_active, Boolean(existing.is_active)),
+      currentStaffStatus(existing) === "archived" ? "archived" : boolToInt(body.is_active, Boolean(existing.is_active)) ? "active" : "deactivated",
       stringValue(body.emergency_contact_name) ?? existing.emergency_contact_name ?? null,
       stringValue(body.emergency_contact_phone) ?? existing.emergency_contact_phone ?? null,
       stringValue(body.availability_notes) ?? existing.availability_notes ?? null,
@@ -994,6 +1021,74 @@ async function updateUserProfile(context: ApiContext, userId: string): Promise<R
 
   await logActivity(context.env.SIDELINE_DB, actor.id, "user", userId, "updated", `${displayName} was updated.`);
   return json({ user: safeUser(await getUserById(context.env.SIDELINE_DB, userId)) });
+}
+
+async function updateUserStatus(context: ApiContext, userId: string): Promise<Response> {
+  if (!userId) throw new Error("Missing user id");
+  const actor = await requireAdminActor(context);
+  const body = await readBody(context.request);
+  const status = requireString(body.status, "status");
+  if (!["active", "deactivated", "archived"].includes(status)) throw new Error("Invalid status");
+
+  const user = await getUserById(context.env.SIDELINE_DB, userId);
+  if (!user) return json({ error: "User not found" }, 404);
+  if (status === "archived" && effectiveRole(actor) !== "owner") return json({ error: "Only Owner can archive staff." }, 403);
+  if (currentStaffStatus(user) === "archived" && status !== "archived" && effectiveRole(actor) !== "owner") {
+    return json({ error: "Only Owner can restore archived staff." }, 403);
+  }
+
+  const isActive = status === "active" ? 1 : 0;
+  await context.env.SIDELINE_DB.prepare(
+    "UPDATE users SET staff_status = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+  )
+    .bind(status, isActive, userId)
+    .run();
+
+  await logActivity(context.env.SIDELINE_DB, actor.id, "user", userId, `status_${status}`, `${user.display_name} was marked ${status}.`);
+  return json({ user: safeUser(await getUserById(context.env.SIDELINE_DB, userId)) });
+}
+
+async function hardDeleteUser(context: ApiContext, userId: string): Promise<Response> {
+  if (!userId) throw new Error("Missing user id");
+  const actor = await requireOwnerActor(context);
+  const body = await readBody(context.request);
+  if (requireString(body.confirmation, "confirmation") !== "DELETE") {
+    throw new Error("Invalid confirmation");
+  }
+  const user = await getUserById(context.env.SIDELINE_DB, userId);
+  if (!user) return json({ error: "User not found" }, 404);
+  if (actor.id === userId) return json({ error: "Cannot permanently delete yourself." }, 400);
+  if (isProtectedOwnerAccount(user)) return json({ error: "Cannot permanently delete the protected Glenn owner account." }, 400);
+
+  const history = await getMeaningfulUserHistory(context.env.SIDELINE_DB, userId);
+  if (history.total > 0) {
+    return json({
+      error: `Cannot permanently delete this user because they have ${history.labels.join(", ")}. Archive instead.`,
+      history,
+    }, 400);
+  }
+
+  const subscriptionIds = await context.env.SIDELINE_DB.prepare("SELECT id FROM notification_subscriptions WHERE user_id = ?")
+    .bind(userId)
+    .all<{ id: string }>();
+
+  await context.env.SIDELINE_DB.batch([
+    ...subscriptionIds.results.map((subscription) =>
+      context.env.SIDELINE_DB.prepare("DELETE FROM notification_deliveries WHERE subscription_id = ?").bind(subscription.id)
+    ),
+    context.env.SIDELINE_DB.prepare("DELETE FROM notification_deliveries WHERE user_id = ?").bind(userId),
+    context.env.SIDELINE_DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId),
+    context.env.SIDELINE_DB.prepare("DELETE FROM notification_subscriptions WHERE user_id = ?").bind(userId),
+    context.env.SIDELINE_DB.prepare("DELETE FROM user_location_availability WHERE user_id = ?").bind(userId),
+    context.env.SIDELINE_DB.prepare("DELETE FROM staff_schedule_views WHERE user_id = ?").bind(userId),
+    context.env.SIDELINE_DB.prepare("DELETE FROM availability_request_recipients WHERE user_id = ?").bind(userId),
+    context.env.SIDELINE_DB.prepare("DELETE FROM invites WHERE created_by_user_id = ? OR accepted_by_user_id = ?").bind(userId, userId),
+    context.env.SIDELINE_DB.prepare("DELETE FROM activity_log WHERE actor_user_id = ? OR (entity_type = 'user' AND entity_id = ?)").bind(userId, userId),
+  ]);
+
+  await context.env.SIDELINE_DB.prepare("DELETE FROM users WHERE id = ?").bind(userId).run();
+  await logActivity(context.env.SIDELINE_DB, actor.id, "user", userId, "permanently_deleted", `${user.display_name} was permanently deleted.`);
+  return json({ ok: true, deleted_user_id: userId });
 }
 
 async function listLocations(context: ApiContext): Promise<Response> {
@@ -1174,7 +1269,7 @@ async function getUsers(db: D1Database) {
   const result = await db.prepare(
     `SELECT id, display_name, phone, email, role, is_active, first_name, last_name,
             emergency_contact_name, emergency_contact_phone, availability_notes,
-            skills_json, internal_notes, created_at, updated_at
+            skills_json, internal_notes, staff_status, created_at, updated_at
      FROM users
      ORDER BY role, display_name`
   ).all<DbUser>();
@@ -1383,6 +1478,7 @@ async function saveLocationAvailability(db: D1Database, userId: string, value: J
 
 function safeUser(user: DbUser | null) {
   if (!user) return null;
+  const status = currentStaffStatus(user);
   return {
     id: user.id,
     display_name: user.display_name,
@@ -1394,6 +1490,8 @@ function safeUser(user: DbUser | null) {
     storedRole: user.role,
     stored_role: user.role,
     is_active: user.is_active,
+    staff_status: status,
+    staffStatus: status,
     emergency_contact_name: user.emergency_contact_name ?? null,
     emergency_contact_phone: user.emergency_contact_phone ?? null,
     availability_notes: user.availability_notes ?? null,
@@ -1409,6 +1507,40 @@ function effectiveRole(user: Pick<DbUser, "id" | "email" | "role">): string {
   const email = user.email?.trim().toLowerCase();
   if (email && ownerEmails.has(email)) return "owner";
   return user.id === "user_glenn" ? "owner" : user.role;
+}
+
+function currentStaffStatus(user: Pick<DbUser, "staff_status" | "is_active">): "active" | "deactivated" | "archived" {
+  if (user.staff_status === "active" || user.staff_status === "deactivated" || user.staff_status === "archived") {
+    return user.staff_status;
+  }
+  return user.is_active ? "active" : "deactivated";
+}
+
+function isProtectedOwnerAccount(user: Pick<DbUser, "id" | "email" | "role">): boolean {
+  return effectiveRole(user) === "owner" || user.id === "user_glenn";
+}
+
+async function getMeaningfulUserHistory(db: D1Database, userId: string): Promise<{ total: number; labels: string[]; counts: Record<string, number> }> {
+  const checks = [
+    { key: "availabilityResponses", label: "availability responses", sql: "SELECT COUNT(*) AS count FROM availability_responses WHERE user_id = ?" },
+    { key: "shiftAssignments", label: "shift assignments", sql: "SELECT COUNT(*) AS count FROM shift_assignments WHERE user_id = ?" },
+    { key: "createdAvailabilityRequests", label: "created availability requests", sql: "SELECT COUNT(*) AS count FROM availability_requests WHERE created_by_user_id = ?" },
+    { key: "createdMessages", label: "created messages", sql: "SELECT COUNT(*) AS count FROM messages WHERE created_by_user_id = ?" },
+    { key: "messageRecipients", label: "message records", sql: "SELECT COUNT(*) AS count FROM message_recipients WHERE user_id = ?" },
+  ];
+  const counts: Record<string, number> = {};
+
+  for (const check of checks) {
+    const row = await db.prepare(check.sql).bind(userId).first<{ count: number }>();
+    counts[check.key] = Number(row?.count ?? 0);
+  }
+
+  const labels = checks.filter((check) => counts[check.key] > 0).map((check) => check.label);
+  return {
+    total: Object.values(counts).reduce((sum, count) => sum + count, 0),
+    labels,
+    counts,
+  };
 }
 
 function safeInvite(invite: DbInvite) {
@@ -1603,7 +1735,7 @@ function corsHeaders(): HeadersInit {
   return {
     ...jsonHeaders,
     "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
+    "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
     "access-control-allow-headers": "content-type",
   };
 }

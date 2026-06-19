@@ -283,6 +283,40 @@ Roles:
 - API user payloads return effective `role`; they may also include `storedRole`/`stored_role` for early-schema compatibility visibility.
 - Future cleanup should rebuild or normalize role storage so D1 can store Owner directly without compatibility logic.
 
+## Milestone 2.0C Account Cleanup Tools
+
+Staff removal states:
+
+- Active: normal staff account. Can log in, can receive new requests, and appears in the default Staff view.
+- Deactivated: temporary inactive account. Cannot log in, is not targeted for new requests, and can be reactivated by Owner/Admin.
+- Archived: owner-only soft delete. Cannot log in, hidden unless Archived or All is selected, preserves history, and can be restored by Owner.
+- Delete Permanently: owner-only hard delete for clean test, duplicate, or broken accounts. Cannot be restored.
+
+Permissions:
+
+- Owner/Admin can deactivate and reactivate staff.
+- Owner only can archive staff.
+- Owner only can restore archived staff.
+- Owner only can permanently delete users.
+- Admin cannot archive, restore archived users, or permanently delete.
+- Staff cannot use staff cleanup or invite cleanup APIs.
+- Owner cannot permanently delete themselves.
+- Protected owner accounts such as `gtips679@gmail.com` and `user_glenn` cannot be permanently deleted.
+
+Hard delete safety:
+
+- Permanent delete removes account-only records where safe: sessions, notification subscriptions, staff location availability, staff schedule views, unused request recipient rows, invite links tied to that user, and account cleanup activity.
+- Permanent delete is blocked if the user has meaningful operational history such as availability responses, shift assignments, created availability requests, created messages, or message recipient records.
+- If hard delete is blocked, archive the staff account instead.
+- The UI requires typing `DELETE` before permanent deletion.
+
+Invite cleanup:
+
+- Owner/Admin can delete used invites.
+- Owner/Admin can delete expired invites.
+- Owner/Admin can delete all inactive invites: used, expired, and revoked.
+- Active unused invite links are not deleted by cleanup actions.
+
 Owner View As:
 
 - Glenn/Owner sees an `Owner Testing` control in the top bar.

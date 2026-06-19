@@ -1,6 +1,7 @@
 export type UserRole = "owner" | "admin" | "manager" | "staff";
 export type PersonaKey = "admin" | "manager" | "staff";
 export type AvailabilityResponseValue = "yes" | "no" | "maybe";
+export type StaffStatus = "active" | "deactivated" | "archived";
 
 export type User = {
   id: string;
@@ -13,6 +14,8 @@ export type User = {
   storedRole?: UserRole;
   stored_role?: UserRole;
   is_active: number;
+  staff_status?: StaffStatus;
+  staffStatus?: StaffStatus;
   emergency_contact_name?: string | null;
   emergency_contact_phone?: string | null;
   availability_notes?: string | null;

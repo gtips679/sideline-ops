@@ -4,9 +4,9 @@ import { DataTable } from "../../components/DataTable";
 import { EmptyState } from "../../components/EmptyState";
 import { SectionHeader } from "../../components/SectionHeader";
 import { StatusPill } from "../../components/StatusPill";
-import { createInvite, listInvites, updateUserProfile } from "../../lib/api";
+import { cleanupInvites, createInvite, listInvites, permanentlyDeleteUser, updateUserProfile, updateUserStatus } from "../../lib/api";
 import { formatDateTime } from "../../lib/format";
-import type { CreatedInvite, InviteSummary, Location, User, UserRole } from "../../lib/types";
+import type { CreatedInvite, InviteSummary, Location, StaffStatus, User, UserRole } from "../../lib/types";
 
 type StaffListScreenProps = {
   users: User[];
@@ -21,9 +21,11 @@ const locationOptions = [
   { value: "willing", label: "Willing" },
   { value: "cannot", label: "Cannot" },
 ] as const;
+const staffFilters = ["active", "deactivated", "archived", "all"] as const;
 
 export function StaffListScreen({ users, locations, currentUser, onRefresh }: StaffListScreenProps) {
-  const manageableUsers = users.filter((user) => user.role !== "manager");
+  const [staffFilter, setStaffFilter] = useState<(typeof staffFilters)[number]>("active");
+  const manageableUsers = users.filter((user) => user.role !== "manager" && (staffFilter === "all" || staffStatus(user) === staffFilter));
   const [selectedUserId, setSelectedUserId] = useState(manageableUsers[0]?.id ?? "");
   const selectedUser = manageableUsers.find((user) => user.id === selectedUserId) ?? manageableUsers[0] ?? null;
   const [invites, setInvites] = useState<InviteSummary[]>([]);
@@ -33,11 +35,20 @@ export function StaffListScreen({ users, locations, currentUser, onRefresh }: St
   const [saving, setSaving] = useState(false);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [cleanupBusy, setCleanupBusy] = useState<string | null>(null);
   const [form, setForm] = useState(() => profileForm(selectedUser));
 
   useEffect(() => {
     setForm(profileForm(selectedUser));
+    setDeleteConfirmation("");
   }, [selectedUser?.id]);
+
+  useEffect(() => {
+    if (selectedUserId && manageableUsers.some((user) => user.id === selectedUserId)) return;
+    setSelectedUserId(manageableUsers[0]?.id ?? "");
+  }, [staffFilter, users.length]);
 
   useEffect(() => {
     refreshInvites();
@@ -71,6 +82,54 @@ export function StaffListScreen({ users, locations, currentUser, onRefresh }: St
     setInviteMessage("Invite link copied.");
   }
 
+  async function runInviteCleanup(mode: "used" | "expired" | "inactive") {
+    setInviteError(null);
+    setInviteMessage(null);
+    setCleanupBusy(mode);
+    try {
+      const result = await cleanupInvites(mode);
+      setInviteMessage(`Invite cleanup removed ${result.deleted} record${result.deleted === 1 ? "" : "s"}.`);
+      await refreshInvites();
+    } catch (err) {
+      setInviteError(err instanceof Error ? err.message : "Could not clean up invites.");
+    } finally {
+      setCleanupBusy(null);
+    }
+  }
+
+  async function changeStatus(status: StaffStatus) {
+    if (!selectedUser) return;
+    setActionBusy(true);
+    setProfileError(null);
+    setProfileMessage(null);
+    try {
+      await updateUserStatus(selectedUser.id, status);
+      setProfileMessage(`Staff status changed to ${status}.`);
+      await onRefresh();
+    } catch (err) {
+      setProfileError(err instanceof Error ? err.message : "Could not update staff status.");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  async function hardDelete() {
+    if (!selectedUser) return;
+    setActionBusy(true);
+    setProfileError(null);
+    setProfileMessage(null);
+    try {
+      await permanentlyDeleteUser(selectedUser.id, deleteConfirmation);
+      setProfileMessage("Staff account permanently deleted.");
+      setDeleteConfirmation("");
+      await onRefresh();
+    } catch (err) {
+      setProfileError(err instanceof Error ? err.message : "Could not permanently delete staff.");
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
   async function submitProfile(event: FormEvent) {
     event.preventDefault();
     if (!selectedUser) return;
@@ -95,7 +154,9 @@ export function StaffListScreen({ users, locations, currentUser, onRefresh }: St
   }
 
   const roleHelp = currentUser.role === "owner" ? "Owner can change roles." : "Only owner can change roles.";
-  const activeStaffCount = useMemo(() => users.filter((user) => user.role === "staff" && user.is_active).length, [users]);
+  const activeStaffCount = useMemo(() => users.filter((user) => user.role === "staff" && staffStatus(user) === "active").length, [users]);
+  const canOwnerManage = currentUser.role === "owner";
+  const selectedStatus = selectedUser ? staffStatus(selectedUser) : "active";
 
   return (
     <>
@@ -116,6 +177,17 @@ export function StaffListScreen({ users, locations, currentUser, onRefresh }: St
         ) : null}
         {inviteMessage ? <div className="notice success">{inviteMessage}</div> : null}
         {inviteError ? <div className="notice error">{inviteError}</div> : null}
+        <div className="button-row">
+          <button className="secondary-button" disabled={cleanupBusy !== null} onClick={() => runInviteCleanup("used")} type="button">
+            {cleanupBusy === "used" ? "Cleaning" : "Delete used invites"}
+          </button>
+          <button className="secondary-button" disabled={cleanupBusy !== null} onClick={() => runInviteCleanup("expired")} type="button">
+            {cleanupBusy === "expired" ? "Cleaning" : "Delete expired invites"}
+          </button>
+          <button className="secondary-button" disabled={cleanupBusy !== null} onClick={() => runInviteCleanup("inactive")} type="button">
+            {cleanupBusy === "inactive" ? "Cleaning" : "Delete all inactive invites"}
+          </button>
+        </div>
         {invites.length === 0 ? (
           <EmptyState title="No invites yet" message="Create the first staff invite link above." />
         ) : (
@@ -138,19 +210,58 @@ export function StaffListScreen({ users, locations, currentUser, onRefresh }: St
             <h2>Staff profiles</h2>
             <p className="muted">{activeStaffCount} active staff. Deactivated users stay in history and cannot log in.</p>
           </div>
-          <label className="compact-select">
-            <span>Edit</span>
-            <select value={selectedUser?.id ?? ""} onChange={(event) => setSelectedUserId(event.target.value)}>
-              {manageableUsers.map((user) => (
-                <option key={user.id} value={user.id}>{user.display_name}</option>
-              ))}
-            </select>
-          </label>
+          <div className="staff-filter-actions">
+            <label className="compact-select">
+              <span>Filter</span>
+              <select value={staffFilter} onChange={(event) => setStaffFilter(event.target.value as (typeof staffFilters)[number])}>
+                <option value="active">Active</option>
+                <option value="deactivated">Deactivated</option>
+                <option value="archived">Archived</option>
+                <option value="all">All</option>
+              </select>
+            </label>
+            <label className="compact-select">
+              <span>Edit</span>
+              <select value={selectedUser?.id ?? ""} onChange={(event) => setSelectedUserId(event.target.value)}>
+                {manageableUsers.map((user) => (
+                  <option key={user.id} value={user.id}>{user.display_name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
         {!selectedUser ? (
           <EmptyState title="No staff profiles" message="Create or invite staff to edit profile details." />
         ) : (
           <form className="form-grid" onSubmit={submitProfile}>
+            <div className="wide-field status-action-panel">
+              <div>
+                <strong>Status: <StatusPill status={selectedStatus} /></strong>
+                <p className="muted">Use deactivate for temporary inactive staff, archive for owner-only soft deletion, and permanent delete only for clean test accounts.</p>
+              </div>
+              <div className="button-row">
+                {selectedStatus === "active" ? (
+                  <button className="secondary-button" disabled={actionBusy} onClick={() => changeStatus("deactivated")} type="button">Deactivate</button>
+                ) : null}
+                {selectedStatus === "deactivated" ? (
+                  <button className="primary-button" disabled={actionBusy} onClick={() => changeStatus("active")} type="button">Reactivate</button>
+                ) : null}
+                {canOwnerManage && selectedStatus !== "archived" ? (
+                  <button className="secondary-button danger-action" disabled={actionBusy} onClick={() => changeStatus("archived")} type="button">Archive Staff</button>
+                ) : null}
+                {canOwnerManage && selectedStatus === "archived" ? (
+                  <button className="primary-button" disabled={actionBusy} onClick={() => changeStatus("active")} type="button">Restore/Reinstate</button>
+                ) : null}
+              </div>
+              {canOwnerManage ? (
+                <div className="delete-confirm-box">
+                  <strong>Delete Permanently</strong>
+                  <p className="muted">This cannot be undone. Type DELETE to remove a clean test account. Accounts with meaningful history are blocked.</p>
+                  <input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} placeholder="Type DELETE" />
+                  <button className="secondary-button danger-action" disabled={actionBusy || deleteConfirmation !== "DELETE"} onClick={hardDelete} type="button">Delete Permanently</button>
+                </div>
+              ) : null}
+            </div>
             <label>
               <span>First name</span>
               <input value={form.first_name} onChange={(event) => setForm({ ...form, first_name: event.target.value })} />
@@ -271,7 +382,14 @@ function profileForm(user: User | null) {
     availability_notes: user?.availability_notes ?? "",
     internal_notes: user?.internal_notes ?? "",
     skills: user?.skills ?? [],
-    is_active: Boolean(user?.is_active ?? 1),
+    is_active: staffStatus(user) === "active",
     locationAvailability,
   };
+}
+
+function staffStatus(user: User | null): StaffStatus {
+  if (user?.staff_status === "active" || user?.staff_status === "deactivated" || user?.staff_status === "archived") {
+    return user.staff_status;
+  }
+  return user?.is_active ? "active" : "deactivated";
 }

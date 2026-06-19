@@ -1,4 +1,4 @@
-import type { ApiHealth, AuthUserResponse, AvailabilityRequest, AvailabilityResponseValue, BootstrapData, CreatedInvite, Event, InviteSummary, Location, NotificationConfig, PushSubscriptionInfo, PushSubscriptionsResponse, TestPushSummary, User } from "./types";
+import type { ApiHealth, AuthUserResponse, AvailabilityRequest, AvailabilityResponseValue, BootstrapData, CreatedInvite, Event, InviteSummary, Location, NotificationConfig, PushSubscriptionInfo, PushSubscriptionsResponse, StaffStatus, TestPushSummary, User } from "./types";
 
 export async function getApiHealth(): Promise<ApiHealth> {
   const response = await fetch("/api/health");
@@ -118,6 +118,26 @@ export async function updateUserProfile(userId: string, input: unknown): Promise
   return (payload as { user: User }).user;
 }
 
+export async function updateUserStatus(userId: string, status: StaffStatus): Promise<User> {
+  const payload = await patchJson<{ user: User }>(`/api/users/${encodeURIComponent(userId)}/status`, { status });
+  return payload.user;
+}
+
+export async function permanentlyDeleteUser(userId: string, confirmation: string): Promise<{ ok: true; deleted_user_id: string }> {
+  const response = await fetch(`/api/users/${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ confirmation }),
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(payload?.error ?? "Could not permanently delete user.");
+  return payload as { ok: true; deleted_user_id: string };
+}
+
+export async function cleanupInvites(mode: "used" | "expired" | "inactive"): Promise<{ ok: true; mode: string; deleted: number }> {
+  return postJson<{ ok: true; mode: string; deleted: number }>("/api/invites/cleanup", { mode });
+}
+
 export async function saveAvailabilityResponse(input: {
   request_id: string;
   user_id: string;
@@ -188,6 +208,20 @@ export async function createAvailabilityRequest(input: {
 async function postJson<T>(url: string, input: unknown): Promise<T> {
   const response = await fetch(url, {
     method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(payload && typeof payload.error === "string" ? payload.error : "Request failed");
+  }
+  return payload as T;
+}
+
+async function patchJson<T>(url: string, input: unknown): Promise<T> {
+  const response = await fetch(url, {
+    method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });

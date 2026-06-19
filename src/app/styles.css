@@ -561,6 +561,41 @@ th {
   gap: 10px;
 }
 
+.staff-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.status-action-panel,
+.delete-confirm-box {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #e2e7df;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcf9;
+}
+
+.delete-confirm-box {
+  border-color: #e5c0ba;
+  background: #fff8f6;
+}
+
+.delete-confirm-box input {
+  max-width: 220px;
+  min-height: 40px;
+  border: 1px solid #d6a49c;
+  border-radius: 7px;
+  padding: 9px 10px;
+}
+
+.danger-action {
+  border-color: #c26d62;
+  color: #87392f;
+}
+
 .location-availability-grid {
   display: grid;
   gap: 10px;
