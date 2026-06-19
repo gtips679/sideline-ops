@@ -290,7 +290,7 @@ Staff removal states:
 - Active: normal staff account. Can log in, can receive new requests, and appears in the default Staff view.
 - Deactivated: temporary inactive account. Cannot log in, is not targeted for new requests, and can be reactivated by Owner/Admin.
 - Archived: owner-only soft delete. Cannot log in, hidden unless Archived or All is selected, preserves history, and can be restored by Owner.
-- Delete Permanently: owner-only hard delete for clean test, duplicate, or broken accounts. Cannot be restored.
+- Delete Permanently: owner-only leave-no-trace delete for test, duplicate, or broken accounts. Removes the user and related account/history records and cannot be restored.
 
 Permissions:
 
@@ -305,10 +305,10 @@ Permissions:
 
 Hard delete safety:
 
-- Permanent delete removes account-only records where safe: sessions, notification subscriptions, staff location availability, staff schedule views, unused request recipient rows, invite links tied to that user, and account cleanup activity.
-- Permanent delete is blocked if the user has meaningful operational history such as availability responses, shift assignments, created availability requests, created messages, or message recipient records.
-- If hard delete is blocked, archive the staff account instead.
-- The UI requires typing `DELETE` before permanent deletion.
+- Permanent delete removes related user records before deleting the user, including sessions, notification subscriptions/deliveries, staff location availability, staff schedule views, availability recipients/responses, shift assignments, message recipient records, messages created by that user, availability requests created by that user, invite links tied to that user, and related activity log rows.
+- Permanent delete is meant for test/problem accounts where the desired outcome is to remove the user and their related history.
+- Archive preserves history and remains the safer option for normal former staff.
+- The UI and API require typing/sending `DELETE FOREVER` before permanent deletion.
 
 Invite cleanup:
 

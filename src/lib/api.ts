@@ -123,7 +123,7 @@ export async function updateUserStatus(userId: string, status: StaffStatus): Pro
   return payload.user;
 }
 
-export async function permanentlyDeleteUser(userId: string, confirmation: string): Promise<{ ok: true; deleted_user_id: string }> {
+export async function permanentlyDeleteUser(userId: string, confirmation: string): Promise<{ ok: true; deleted_user_id: string; deleted?: Record<string, number> }> {
   const response = await fetch(`/api/users/${encodeURIComponent(userId)}`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
@@ -131,7 +131,7 @@ export async function permanentlyDeleteUser(userId: string, confirmation: string
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) throw new Error(payload?.error ?? "Could not permanently delete user.");
-  return payload as { ok: true; deleted_user_id: string };
+  return payload as { ok: true; deleted_user_id: string; deleted?: Record<string, number> };
 }
 
 export async function cleanupInvites(mode: "used" | "expired" | "inactive"): Promise<{ ok: true; mode: string; deleted: number }> {

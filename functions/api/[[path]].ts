@@ -1052,7 +1052,7 @@ async function hardDeleteUser(context: ApiContext, userId: string): Promise<Resp
   if (!userId) throw new Error("Missing user id");
   const actor = await requireOwnerActor(context);
   const body = await readBody(context.request);
-  if (requireString(body.confirmation, "confirmation") !== "DELETE") {
+  if (requireString(body.confirmation, "confirmation") !== "DELETE FOREVER") {
     throw new Error("Invalid confirmation");
   }
   const user = await getUserById(context.env.SIDELINE_DB, userId);
@@ -1060,35 +1060,51 @@ async function hardDeleteUser(context: ApiContext, userId: string): Promise<Resp
   if (actor.id === userId) return json({ error: "Cannot permanently delete yourself." }, 400);
   if (isProtectedOwnerAccount(user)) return json({ error: "Cannot permanently delete the protected Glenn owner account." }, 400);
 
-  const history = await getMeaningfulUserHistory(context.env.SIDELINE_DB, userId);
-  if (history.total > 0) {
-    return json({
-      error: `Cannot permanently delete this user because they have ${history.labels.join(", ")}. Archive instead.`,
-      history,
-    }, 400);
-  }
+  const db = context.env.SIDELINE_DB;
+  const deleted: Record<string, number> = {};
+  const addDeleted = (key: string, count: number) => {
+    deleted[key] = (deleted[key] ?? 0) + count;
+  };
 
-  const subscriptionIds = await context.env.SIDELINE_DB.prepare("SELECT id FROM notification_subscriptions WHERE user_id = ?")
+  const createdAvailabilityRequestIds = await db.prepare("SELECT id FROM availability_requests WHERE created_by_user_id = ?")
+    .bind(userId)
+    .all<{ id: string }>();
+  const createdMessageIds = await db.prepare("SELECT id FROM messages WHERE created_by_user_id = ?")
+    .bind(userId)
+    .all<{ id: string }>();
+  const subscriptionIds = await db.prepare("SELECT id FROM notification_subscriptions WHERE user_id = ?")
     .bind(userId)
     .all<{ id: string }>();
 
-  await context.env.SIDELINE_DB.batch([
-    ...subscriptionIds.results.map((subscription) =>
-      context.env.SIDELINE_DB.prepare("DELETE FROM notification_deliveries WHERE subscription_id = ?").bind(subscription.id)
-    ),
-    context.env.SIDELINE_DB.prepare("DELETE FROM notification_deliveries WHERE user_id = ?").bind(userId),
-    context.env.SIDELINE_DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId),
-    context.env.SIDELINE_DB.prepare("DELETE FROM notification_subscriptions WHERE user_id = ?").bind(userId),
-    context.env.SIDELINE_DB.prepare("DELETE FROM user_location_availability WHERE user_id = ?").bind(userId),
-    context.env.SIDELINE_DB.prepare("DELETE FROM staff_schedule_views WHERE user_id = ?").bind(userId),
-    context.env.SIDELINE_DB.prepare("DELETE FROM availability_request_recipients WHERE user_id = ?").bind(userId),
-    context.env.SIDELINE_DB.prepare("DELETE FROM invites WHERE created_by_user_id = ? OR accepted_by_user_id = ?").bind(userId, userId),
-    context.env.SIDELINE_DB.prepare("DELETE FROM activity_log WHERE actor_user_id = ? OR (entity_type = 'user' AND entity_id = ?)").bind(userId, userId),
-  ]);
+  const requestIds = createdAvailabilityRequestIds.results.map((row) => row.id);
+  const messageIds = createdMessageIds.results.map((row) => row.id);
+  const pushSubscriptionIds = subscriptionIds.results.map((row) => row.id);
 
-  await context.env.SIDELINE_DB.prepare("DELETE FROM users WHERE id = ?").bind(userId).run();
-  await logActivity(context.env.SIDELINE_DB, actor.id, "user", userId, "permanently_deleted", `${user.display_name} was permanently deleted.`);
-  return json({ ok: true, deleted_user_id: userId });
+  addDeleted("availabilityResponses", await deleteRowsByIds(db, "DELETE FROM availability_responses WHERE request_id IN", requestIds));
+  addDeleted("availabilityRequestRecipients", await deleteRowsByIds(db, "DELETE FROM availability_request_recipients WHERE request_id IN", requestIds));
+  addDeleted("activityLog", await deleteEntityActivityRows(db, "availability_request", requestIds));
+  addDeleted("availabilityRequests", await deleteRowsByIds(db, "DELETE FROM availability_requests WHERE id IN", requestIds));
+
+  addDeleted("availabilityResponses", await deleteRows(db, "DELETE FROM availability_responses WHERE user_id = ?", userId));
+  addDeleted("availabilityRequestRecipients", await deleteRows(db, "DELETE FROM availability_request_recipients WHERE user_id = ?", userId));
+  addDeleted("shiftAssignments", await deleteRows(db, "DELETE FROM shift_assignments WHERE user_id = ?", userId));
+  addDeleted("staffScheduleViews", await deleteRows(db, "DELETE FROM staff_schedule_views WHERE user_id = ?", userId));
+  addDeleted("userLocationAvailability", await deleteRows(db, "DELETE FROM user_location_availability WHERE user_id = ?", userId));
+
+  addDeleted("messageRecipients", await deleteRowsByIds(db, "DELETE FROM message_recipients WHERE message_id IN", messageIds));
+  addDeleted("activityLog", await deleteEntityActivityRows(db, "message", messageIds));
+  addDeleted("messages", await deleteRowsByIds(db, "DELETE FROM messages WHERE id IN", messageIds));
+  addDeleted("messageRecipients", await deleteRows(db, "DELETE FROM message_recipients WHERE user_id = ?", userId));
+
+  addDeleted("notificationDeliveries", await deleteRowsByIds(db, "DELETE FROM notification_deliveries WHERE subscription_id IN", pushSubscriptionIds));
+  addDeleted("notificationDeliveries", await deleteRows(db, "DELETE FROM notification_deliveries WHERE user_id = ?", userId));
+  addDeleted("notificationSubscriptions", await deleteRows(db, "DELETE FROM notification_subscriptions WHERE user_id = ?", userId));
+  addDeleted("sessions", await deleteRows(db, "DELETE FROM sessions WHERE user_id = ?", userId));
+  addDeleted("invites", await deleteRows(db, "DELETE FROM invites WHERE created_by_user_id = ? OR accepted_by_user_id = ?", userId, userId));
+  addDeleted("activityLog", await deleteRows(db, "DELETE FROM activity_log WHERE actor_user_id = ? OR (entity_type = 'user' AND entity_id = ?)", userId, userId));
+  addDeleted("user", await deleteRows(db, "DELETE FROM users WHERE id = ?", userId));
+
+  return json({ ok: true, deleted_user_id: userId, deleted });
 }
 
 async function listLocations(context: ApiContext): Promise<Response> {
@@ -1520,27 +1536,21 @@ function isProtectedOwnerAccount(user: Pick<DbUser, "id" | "email" | "role">): b
   return effectiveRole(user) === "owner" || user.id === "user_glenn";
 }
 
-async function getMeaningfulUserHistory(db: D1Database, userId: string): Promise<{ total: number; labels: string[]; counts: Record<string, number> }> {
-  const checks = [
-    { key: "availabilityResponses", label: "availability responses", sql: "SELECT COUNT(*) AS count FROM availability_responses WHERE user_id = ?" },
-    { key: "shiftAssignments", label: "shift assignments", sql: "SELECT COUNT(*) AS count FROM shift_assignments WHERE user_id = ?" },
-    { key: "createdAvailabilityRequests", label: "created availability requests", sql: "SELECT COUNT(*) AS count FROM availability_requests WHERE created_by_user_id = ?" },
-    { key: "createdMessages", label: "created messages", sql: "SELECT COUNT(*) AS count FROM messages WHERE created_by_user_id = ?" },
-    { key: "messageRecipients", label: "message records", sql: "SELECT COUNT(*) AS count FROM message_recipients WHERE user_id = ?" },
-  ];
-  const counts: Record<string, number> = {};
+async function deleteRows(db: D1Database, sql: string, ...values: unknown[]): Promise<number> {
+  const result = await db.prepare(sql).bind(...values).run();
+  return Number(result.meta?.changes ?? 0);
+}
 
-  for (const check of checks) {
-    const row = await db.prepare(check.sql).bind(userId).first<{ count: number }>();
-    counts[check.key] = Number(row?.count ?? 0);
-  }
+async function deleteRowsByIds(db: D1Database, sqlPrefix: string, ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const placeholders = ids.map(() => "?").join(", ");
+  return deleteRows(db, `${sqlPrefix} (${placeholders})`, ...ids);
+}
 
-  const labels = checks.filter((check) => counts[check.key] > 0).map((check) => check.label);
-  return {
-    total: Object.values(counts).reduce((sum, count) => sum + count, 0),
-    labels,
-    counts,
-  };
+async function deleteEntityActivityRows(db: D1Database, entityType: string, entityIds: string[]): Promise<number> {
+  if (entityIds.length === 0) return 0;
+  const placeholders = entityIds.map(() => "?").join(", ");
+  return deleteRows(db, `DELETE FROM activity_log WHERE entity_type = ? AND entity_id IN (${placeholders})`, entityType, ...entityIds);
 }
 
 function safeInvite(invite: DbInvite) {

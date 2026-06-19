@@ -237,7 +237,7 @@ export function StaffListScreen({ users, locations, currentUser, onRefresh }: St
             <div className="wide-field status-action-panel">
               <div>
                 <strong>Status: <StatusPill status={selectedStatus} /></strong>
-                <p className="muted">Use deactivate for temporary inactive staff, archive for owner-only soft deletion, and permanent delete only for clean test accounts.</p>
+                <p className="muted">Use deactivate for temporary inactive staff, archive for owner-only soft deletion, and permanent delete only for test or problem accounts.</p>
               </div>
               <div className="button-row">
                 {selectedStatus === "active" ? (
@@ -256,9 +256,9 @@ export function StaffListScreen({ users, locations, currentUser, onRefresh }: St
               {canOwnerManage ? (
                 <div className="delete-confirm-box">
                   <strong>Delete Permanently</strong>
-                  <p className="muted">This cannot be undone. Type DELETE to remove a clean test account. Accounts with meaningful history are blocked.</p>
-                  <input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} placeholder="Type DELETE" />
-                  <button className="secondary-button danger-action" disabled={actionBusy || deleteConfirmation !== "DELETE"} onClick={hardDelete} type="button">Delete Permanently</button>
+                  <p className="muted">Delete Permanently removes this staff member and related account/history records. This cannot be undone.</p>
+                  <input value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} placeholder="Type DELETE FOREVER" />
+                  <button className="secondary-button danger-action" disabled={actionBusy || deleteConfirmation !== "DELETE FOREVER"} onClick={hardDelete} type="button">Delete Permanently</button>
                 </div>
               ) : null}
             </div>
